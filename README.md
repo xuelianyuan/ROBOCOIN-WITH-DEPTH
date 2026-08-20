@@ -209,7 +209,7 @@ data/lerobot/dataset/
 ```bash
 # 为已有 LeRobot 数据集添加深度
 python scripts/add_depth_fs_parallel.py \
-    --dataset-dir data/lerobot/dataset \
+    --dataset-dir /home/user/datasets/leju_depth_preview/Leju_Kuavo_4_box_storage_parcel_0_qced_hardlink_ep000000 \
     --strategy da3_rife \
     --sample-stride 5 \
     --da3-chunk-size 16 \
@@ -357,6 +357,63 @@ python scripts/load_lerobot.py --repo-id test --camera all
 | `--repo-id` / `--root` | 数据集 ID / 根目录 | 必填 / data/lerobot |
 | `--episode` / `--frame` | episode 索引 / 帧索引 | 0 / 0 |
 | `--camera` | head / right / all | all |
+
+### `analyze_depth.py` — DA3-Nested 稀疏分析
+
+对每个 episode 均匀采样少量帧，运行 DA3-Nested，并同时保留高精度 `.npy`、采样索引/统计 JSON，以及可选的 `gray12le` 稀疏视频。稀疏视频只包含采样帧，不伪装成原始视频的完整时间轴。
+
+```bash
+python scripts/analyze_depth.py \
+    --dataset-dir data/lerobot/leju_depth_preview/Leju_Kuavo_4_box_storage_parcel_0_qced_hardlink_ep000000 \
+    --camera head \
+    --sample-count 20 \
+    --strategy da3_nested \
+    --save-video \
+    --output-dir data/lerobot/dataset/depth_statistics
+```
+
+该脚本会扫描数据集中的全部 episode RGB 视频，对均匀采样帧运行 DA3-Nested，并保存每帧 `.npy`、逐帧统计值（有效像素数、均值、方差、分位数）及汇总统计。稀疏视频严格使用 H.265 `libx265` + `gray12le`；若要更新已有结果，增加 `--force`。
+
+输出位于 `depth_statistics/<camera>/<episode>/`，视频位于
+`videos/<chunk>/observation.images.<camera>_depth_nested_sparse/`。`.npy` 保留模型原始浮点输出，后续 refine 拟合不得以压缩视频作为唯一数据源。
+
+### `refine_depth.py` — Nested 参考校正
+
+前面完整深度视频由 DA3 LARGE-1.1 生成。无法获得真实 RGB-D 时，使用 DA3-Nested 稀疏结果作为参考，拟合 `a * D_DA3_LARGE + b`，再对完整 DA3 LARGE-1.1 视频逐帧校正。该结果是相对一致性校正，不代表物理真值：
+
+```bash
+python scripts/refine_depth.py \
+  --dataset-dir data/lerobot/dataset --camera head \
+  --reference nested \
+  --input-depth-suffix _depth
+```
+
+refine 阶段严格按 `gray12le` 解码 DA3 LARGE-1.1 深度视频，并以同样的 H.265 `gray12le` 格式编码 refined 视频；拟合参数和校正前后统计写入 `refine_parameters.json`。
+
+默认读取 `observation.images.<camera>_depth`（DA3 LARGE-1.1）和第一阶段保存的 Nested `.npy`，输出到
+`observation.images.<camera>_depth_refined`。每个 episode 的拟合参数、与 Nested 参考的 baseline/refined MAE 与 RMSE 保存在对应的 `depth_statistics/<camera>/<episode>/refine_parameters.json`。
+
+如果以后有真实深度，可切换 `--reference real` 并指定 `--real-depth-suffix`；此时指标才具有真实深度误差含义。
+
+#### 理论解释与方案比较
+
+DA3 LARGE-1.1 和 DA3-Nested 都是从 RGB 推断深度，输出可能存在不同的全局尺度、偏移和分布差异。没有真实 RGB-D 时，不能求得物理绝对误差，只能把 Nested 作为稀疏高精度参考，在对应采样帧上拟合：
+
+```text
+D_refined = clip(a * D_DA3_LARGE + b, 0, 4095)
+```
+
+其中 `a` 描述尺度误差，`b` 描述偏移误差。拟合使用有效像素并剔除 DA3 预测的 1% 和 99% 分位之外的离群值。该方法假设两种模型在同一场景中的几何结构大体一致，因此适合改善尺度一致性，但不能替代真实传感器标定。
+
+方案对比如下：
+
+| 方案 | 优点 | 局限 | 适用场景 |
+|---|---|---|---|
+| 真实 RGB-D 校正 | 可计算物理 MAE/RMSE，能校准绝对距离 | 需要同步且可靠的真实深度 | 有深度传感器或标定数据 |
+| Nested 参考校正 | 不需要真实深度；可统一 LARGE-1.1 的尺度分布 | 只能衡量与 Nested 的一致性，不保证物理准确 | 当前仅有 RGB 的数据集 |
+| 不校正的 LARGE-1.1 | 保留原模型输出，流程最简单 | 可能有尺度漂移和跨帧分布差异 | 只做相对深度排序 |
+
+在 `refine_depth.py` 中增加 `--plot-trend` 可保存 `refine_trend.png`。曲线包含采样帧的 DA3、Nested 参考和 refined 深度均值，以及校正前后的逐帧 MAE。逐帧原始数值同时写入 `refine_parameters.json`，便于后续统计检验。
 
 ## 致谢
 
