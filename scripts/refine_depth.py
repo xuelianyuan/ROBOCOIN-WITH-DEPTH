@@ -15,6 +15,7 @@ from src.depth_encoder import DepthVideoEncoder
 
 
 def _probe(path: Path) -> tuple[int, int]:
+    """读取视频第一路视频流的宽高，供原始字节重排使用。"""
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                         "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)],
                        capture_output=True, text=True, check=False)
@@ -22,6 +23,11 @@ def _probe(path: Path) -> tuple[int, int]:
 
 
 def _decode(path: Path, pix_fmt: str) -> list[np.ndarray]:
+    """按指定像素格式解码视频，并返回逐帧 NumPy 数组。
+
+    深度视频使用单通道 ``gray12le/gray16le``；RGB 视频使用三通道格式。
+    ``ffmpeg`` 输出的是连续字节，因此必须依据探测到的宽高逐帧切片。
+    """
     w, h = _probe(path)
     r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(path),
                         "-f", "rawvideo", "-pix_fmt", pix_fmt, "-"],
@@ -36,6 +42,7 @@ def _decode(path: Path, pix_fmt: str) -> list[np.ndarray]:
 
 
 def _metrics(pred: list[np.ndarray], target: list[np.ndarray]) -> dict:
+    """汇总预测与参考帧的像素级 MAE、RMSE 和有符号偏差。"""
     errors = []
     for p, t in zip(pred, target):
         mask = np.isfinite(p) & np.isfinite(t) & (t > 0) & (p > 0)
@@ -76,6 +83,7 @@ def _plot_trend(path: Path, frame_ids: list[int], before: list[dict], after: lis
 
 
 def main() -> None:
+    """利用采样参考拟合线性关系，并将其应用到完整 DA3 深度视频。"""
     p = argparse.ArgumentParser(description="使用 Nested 参考校正 DA3 LARGE-1.1 深度视频")
     p.add_argument("--dataset-dir", required=True)
     p.add_argument("--camera", required=True, help="head/right/left/chest")
@@ -91,10 +99,12 @@ def main() -> None:
     p.add_argument("--preset", default="medium")
     p.add_argument("--fps", type=int, default=30)
     args = p.parse_args()
+    # 输入/输出目录可分离：默认在数据集原 videos 目录旁生成 refined 目录。
     root = Path(args.dataset_dir)
     stat_root = Path(args.statistics_dir) if args.statistics_dir else root / "depth_statistics"
     out_root = Path(args.output_dir) if args.output_dir else root / "videos"
     encoder = DepthVideoEncoder(args.fps, args.crf, args.preset)
+    # 通过 RGB 目录定位 chunk，再推导 DA3、真实深度和 refined 目录名称。
     for rgb_dir in sorted((root / "videos").glob(f"chunk-*/observation.images.*{args.camera}*rgb")):
         chunk = rgb_dir.parent
         name = rgb_dir.name.replace("_rgb", "")
@@ -108,12 +118,14 @@ def main() -> None:
             real_path = real_dir / da3_path.name
             nested_ep = stat_root / (f"cam_{args.camera}" if not args.camera.startswith("cam_") else args.camera) / ep
             idx_path = nested_ep / "sample_indices.json"
+            # 没有 Nested 采样索引，或选择真实参考但真实视频缺失时，无法拟合，直接跳过。
             if not idx_path.exists() or (args.reference == "real" and not real_path.exists()):
                 continue
             indices = json.loads(idx_path.read_text())["sample_frame_indices"]
             da3 = _decode(da3_path, "gray12le")
             real = _decode(real_path, args.real_pix_fmt) if args.reference == "real" else None
             nested = [np.load(nested_ep / f"frame_{i:09d}.npy") for i in indices]
+            # xs/ys 收集采样帧中逐像素的 DA3/参考配对，用于全局线性回归。
             xs, ys = [], []
             nested_valid = []
             for i, n in zip(indices, nested):
@@ -125,10 +137,12 @@ def main() -> None:
             if not xs: continue
             # 用采样帧的像素配对估计全局尺度和偏移；Nested 不是物理真值，
             # 因此该参数表达的是相对一致性校正，而非传感器标定。
+            # 合并所有采样帧，并去除两端 1% 离群值，降低遮挡和异常深度的影响。
             x, y = np.concatenate(xs), np.concatenate(ys)
             lo, hi = np.percentile(x, [1, 99]); keep = (x >= lo) & (x <= hi)
             a, b = np.linalg.lstsq(np.stack([x[keep], np.ones(keep.sum())], 1), y[keep], rcond=None)[0]
             # 将拟合关系应用到完整 DA3 LARGE-1.1 视频，并限制到 12-bit 毫米量程。
+            # 对完整 DA3 视频逐帧应用 y = a*x + b，并限制到 12-bit 深度范围。
             refined = [np.clip(a * f + b, 0, 4095).astype(np.float32) for f in da3]
             out_path = refined_dir / da3_path.name
             encoder.encode_from_arrays(refined, str(out_path))
@@ -138,6 +152,7 @@ def main() -> None:
                               if real is None else da3)
             reference_refined = ([refined[i] for i in indices if i < len(refined)]
                                  if real is None else refined)
+            # 同时计算校正前后误差；这些指标和逐帧趋势会写入参数 JSON。
             before = _metrics(reference_pred, reference_frames)
             after = _metrics(reference_refined, reference_frames)
             frame_ids = [i for i in indices if i < len(da3) and (real is None or i < len(real))]
