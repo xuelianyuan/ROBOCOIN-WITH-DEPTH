@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -65,6 +66,7 @@ def _stats(frames: list[np.ndarray]) -> dict:
     values = np.concatenate([f[np.isfinite(f) & (f > 0)].ravel() for f in frames])
     if values.size == 0:
         return {"count": len(frames), "valid_pixels": 0}
+    quantile_levels = np.linspace(0, 100, 101)
     return {
         "count": len(frames),
         "valid_pixels": int(values.size),
@@ -73,8 +75,13 @@ def _stats(frames: list[np.ndarray]) -> dict:
         "mean_mm": float(values.mean()),
         "std_mm": float(values.std()),
         "p01_mm": float(np.percentile(values, 1)),
+        "p10_mm": float(np.percentile(values, 10)),
         "p50_mm": float(np.percentile(values, 50)),
+        "p90_mm": float(np.percentile(values, 90)),
         "p99_mm": float(np.percentile(values, 99)),
+        # 101 个分位点是一维最优传输/直方图匹配的紧凑表示。
+        "quantile_levels": quantile_levels.tolist(),
+        "quantiles_mm": np.percentile(values, quantile_levels).tolist(),
     }
 
 
@@ -85,7 +92,9 @@ def _frame_stats(frame: np.ndarray) -> dict:
         return {"valid_pixels": 0}
     return {"valid_pixels": int(valid.size), "min_mm": float(valid.min()),
             "max_mm": float(valid.max()), "mean_mm": float(valid.mean()),
-            "std_mm": float(valid.std()), "p50_mm": float(np.percentile(valid, 50)),
+            "std_mm": float(valid.std()), "p10_mm": float(np.percentile(valid, 10)),
+            "p50_mm": float(np.percentile(valid, 50)),
+            "p90_mm": float(np.percentile(valid, 90)),
             "p99_mm": float(np.percentile(valid, 99))}
 
 
@@ -159,9 +168,11 @@ def main() -> None:
             # 与 sampled_rgb 一一对应，不能误当成完整视频帧序列。
             nested = repair.repair_frames(sampled_rgb, []) if sampled_rgb else []
             ep_out.mkdir(parents=True, exist_ok=True)
-            # 每个采样结果单独保存为 float32 NPY，便于后续拟合和复用。
+            # 每个采样结果以毫米为单位保存为 uint16 PNG 和 NPY。
             for frame_idx, depth in zip(indices, nested):
-                np.save(ep_out / f"frame_{frame_idx:09d}.npy", depth.astype(np.float32))
+                depth_u16 = np.clip(np.rint(depth), 0, 65535).astype(np.uint16)
+                cv2.imwrite(str(ep_out / f"frame_{frame_idx:09d}.png"), depth_u16)
+                np.save(ep_out / f"frame_{frame_idx:09d}.npy", depth_u16)
             with open(ep_out / "sample_indices.json", "w") as f:
                 json.dump({"source_video": str(video_path), "source_num_frames": len(rgb),
                            "sample_count": len(indices), "fps": args.fps,

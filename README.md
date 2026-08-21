@@ -360,7 +360,7 @@ python scripts/load_lerobot.py --repo-id test --camera all
 
 ### `analyze_depth.py` — DA3-Nested 稀疏分析
 
-对每个 episode 均匀采样少量帧，运行 DA3-Nested，并同时保留高精度 `.npy`、采样索引/统计 JSON，以及可选的 `gray12le` 稀疏视频。稀疏视频只包含采样帧，不伪装成原始视频的完整时间轴。
+对每个 episode 均匀采样少量帧，运行 DA3-Nested，并保存 `uint16` 毫米深度 PNG/NPY、采样索引和统计 JSON。统计文件额外保存 101 个分位点，供后续一维最优传输（直方图匹配）使用。可选的 `gray12le` 稀疏视频只用于查看采样结果，不代表完整时间轴。
 
 ```bash
 python scripts/analyze_depth.py \
@@ -372,48 +372,70 @@ python scripts/analyze_depth.py \
     --output-dir data/lerobot/dataset/depth_statistics
 ```
 
-该脚本会扫描数据集中的全部 episode RGB 视频，对均匀采样帧运行 DA3-Nested，并保存每帧 `.npy`、逐帧统计值（有效像素数、均值、方差、分位数）及汇总统计。稀疏视频严格使用 H.265 `libx265` + `gray12le`；若要更新已有结果，增加 `--force`。
+该脚本会扫描数据集中的全部 episode RGB 视频，对均匀采样帧运行 DA3-Nested，并保存逐帧统计值（有效像素数、均值、方差、P10/P50/P90 和分位数曲线）及汇总统计。若要更新已有结果，增加 `--force`。
 
 输出位于 `depth_statistics/<camera>/<episode>/`，视频位于
-`videos/<chunk>/observation.images.<camera>_depth_nested_sparse/`。`.npy` 保留模型原始浮点输出，后续 refine 拟合不得以压缩视频作为唯一数据源。
+`videos/<chunk>/observation.images.<camera>_depth_nested_sparse/`。PNG 和 NPY 均为 `uint16` 毫米深度；后续迁移以无损 NPY 为参考，不以压缩视频作为拟合数据源。
 
-### `refine_depth.py` — Nested 参考校正
+### `refine_depth.py` — 分布迁移、验证与 RIFE 补帧
 
-前面完整深度视频由 DA3 LARGE-1.1 生成。无法获得真实 RGB-D 时，使用 DA3-Nested 稀疏结果作为参考，拟合 `a * D_DA3_LARGE + b`，再对完整 DA3 LARGE-1.1 视频逐帧校正。该结果是相对一致性校正，不代表物理真值：
+该流程严格分为两步。第一步只比较原深度视频的采样帧和对应 Nested 深度，学习迁移函数并写出指标，不生成最终视频：
 
 ```bash
 python scripts/refine_depth.py \
-  --dataset-dir data/lerobot/dataset --camera head \
-  --reference nested \
-  --input-depth-suffix _depth
+  --dataset-dir data/lerobot/leju_depth_preview/Leju_Kuavo_4_box_storage_parcel_0_qced_hardlink_ep000000 \
+  --statistics-dir data/lerobot/dataset/depth_statistics \
+  --camera head \
+  --input-depth-suffix _depth \
+  --mapping quantile \
+  --stage validate
+  --plot-trend
 ```
 
-refine 阶段严格按 `gray12le` 解码 DA3 LARGE-1.1 深度视频，并以同样的 H.265 `gray12le` 格式编码 refined 视频；拟合参数和校正前后统计写入 `refine_parameters.json`。
+`quantile` 使用一维最优传输的分位数映射：
 
-默认读取 `observation.images.<camera>_depth`（DA3 LARGE-1.1）和第一阶段保存的 Nested `.npy`，输出到
-`observation.images.<camera>_depth_refined`。每个 episode 的拟合参数、与 Nested 参考的 baseline/refined MAE 与 RMSE 保存在对应的 `depth_statistics/<camera>/<episode>/refine_parameters.json`。
+```text
+T(x) = F_nested^-1(F_source(x))
+```
 
-如果以后有真实深度，可切换 `--reference real` 并指定 `--real-depth-suffix`；此时指标才具有真实深度误差含义。
+Earth Mover's Distance 在一维情况下等价于 Wasserstein-1 Distance。它在这里用于衡量迁移前后的分布差异；真正执行迁移的是上述分位数映射。`--mapping linear` 可作为 `a*x+b` 基线。
+
+验证结果写入 `depth_statistics/<camera>/<episode>/refine_parameters.json`，包括均值误差、P10/P50/P90、逐像素 MAE/RMSE、Wasserstein-1 距离及逐采样帧指标。只有 MAE、RMSE 和 Wasserstein 距离同时下降时，`improved` 才为 `true`。
+
+确认多个 episode 的验证结果稳定后，再显式运行 RIFE 阶段：
+
+```bash
+python scripts/refine_depth.py \
+  --dataset-dir data/lerobot/leju_depth_preview/Leju_Kuavo_4_box_storage_parcel_0_qced_hardlink_ep000000 \
+  --statistics-dir data/lerobot/dataset/depth_statistics --camera head \
+  --input-depth-suffix _depth \
+  --mapping quantile \
+  --stage rife
+```
+
+RIFE 在对应 RGB 关键帧之间估算光流，将迁移后的稀疏深度关键帧 warp 到全部原始帧位置。输出帧数严格等于 RGB/原深度视频帧数，并写入 `observation.images.<camera>_depth_refined`。指标未同时改善时脚本默认拒绝生成视频；仅在人工检查并接受风险后使用 `--allow-unvalidated`。
+
+如需直接把同一个映射应用到原深度视频的每一帧，而不是使用 RIFE，可指定 `--stage full`。输入为 16-bit 深度视频时使用 `--input-pix-fmt gray16le`。
 
 #### 理论解释与方案比较
 
-DA3 LARGE-1.1 和 DA3-Nested 都是从 RGB 推断深度，输出可能存在不同的全局尺度、偏移和分布差异。没有真实 RGB-D 时，不能求得物理绝对误差，只能把 Nested 作为稀疏高精度参考，在对应采样帧上拟合：
+原深度与 DA3-Nested 可能存在不同的全局尺度、偏移和非线性分布差异。没有真实 RGB-D 时，不能求得物理绝对误差，只能把 Nested 作为稀疏参考。均值接近只是必要条件，不足以证明空间结构正确，因此验证同时报告分布距离和逐像素误差。
 
-```text
-D_refined = clip(a * D_DA3_LARGE + b, 0, 4095)
-```
-
-其中 `a` 描述尺度误差，`b` 描述偏移误差。拟合使用有效像素并剔除 DA3 预测的 1% 和 99% 分位之外的离群值。该方法假设两种模型在同一场景中的几何结构大体一致，因此适合改善尺度一致性，但不能替代真实传感器标定。
+分位数映射能处理非线性的分布差异，是当前默认方法。线性基线使用
+`D_refined = clip(a * D_source + b, 0, 4095)`，其中 `a` 描述尺度误差，`b`
+描述偏移误差，并剔除源深度 1% 和 99% 分位之外的离群值。两种方法都只利用
+有效的对应像素，能够改善与 Nested 的一致性，但不能替代真实传感器标定。
 
 方案对比如下：
 
 | 方案 | 优点 | 局限 | 适用场景 |
 |---|---|---|---|
 | 真实 RGB-D 校正 | 可计算物理 MAE/RMSE，能校准绝对距离 | 需要同步且可靠的真实深度 | 有深度传感器或标定数据 |
-| Nested 参考校正 | 不需要真实深度；可统一 LARGE-1.1 的尺度分布 | 只能衡量与 Nested 的一致性，不保证物理准确 | 当前仅有 RGB 的数据集 |
-| 不校正的 LARGE-1.1 | 保留原模型输出，流程最简单 | 可能有尺度漂移和跨帧分布差异 | 只做相对深度排序 |
+| Nested 分位数迁移 | 能处理非线性分布差异，直接降低 EMD/Wasserstein | 忽略像素空间关系，不保证物理准确 | 当前默认验证方法 |
+| Nested 线性迁移 | 参数少、容易解释、不易过拟合 | 只能处理尺度和偏移 | `quantile` 的基线实验 |
+| 不迁移 | 保留原模型输出，流程最简单 | 可能有尺度漂移和跨帧分布差异 | 只做相对深度排序 |
 
-在 `refine_depth.py` 中增加 `--plot-trend` 可保存 `refine_trend.png`。曲线包含采样帧的 DA3、Nested 参考和 refined 深度均值，以及校正前后的逐帧 MAE。逐帧原始数值同时写入 `refine_parameters.json`，便于后续统计检验。
+`--plot-trend` 会保存 `refine_trend.png`，显示采样帧的原始/Nested/迁移后均值，以及迁移前后的逐帧 Wasserstein-1 距离。逐帧原始数值同时写入 JSON，便于在启用 RIFE 前人工检查。
 
 ## 致谢
 
