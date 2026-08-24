@@ -369,13 +369,21 @@ python scripts/analyze_depth.py \
     --sample-count 20 \
     --strategy da3_nested \
     --save-video \
-    --output-dir data/lerobot/dataset/depth_statistics
+    --result-root data/lerobot/dataset/depth_results
 ```
 
 该脚本会扫描数据集中的全部 episode RGB 视频，对均匀采样帧运行 DA3-Nested，并保存逐帧统计值（有效像素数、均值、方差、P10/P50/P90 和分位数曲线）及汇总统计。若要更新已有结果，增加 `--force`。
 
-输出位于 `depth_statistics/<camera>/<episode>/`，视频位于
-`videos/<chunk>/observation.images.<camera>_depth_nested_sparse/`。PNG 和 NPY 均为 `uint16` 毫米深度；后续迁移以无损 NPY 为参考，不以压缩视频作为拟合数据源。
+默认输出按阶段分层，便于对比：`depth_results/baseline/statistics/<camera>/<episode>/` 保存 Nested PNG/NPY、统计与 manifest，`depth_results/baseline/videos/` 保存稀疏视频；`depth_results/refine/reports/<camera>/<episode>/` 保存 refine 报告，`depth_results/refine/videos/` 保存 refined 视频。可用 `--result-root` 更换根目录；显式传入旧的 `--output-dir` 或 `--statistics-dir` 时仍按指定目录工作。PNG 和 NPY 均为 `uint16` 毫米深度；后续迁移以无损 NPY 为参考，不以压缩视频作为拟合数据源。
+
+如需一次扫描 `data/lerobot` 下的全部项目，可使用批处理器（默认 head、left_wrist、right_wrist）：
+
+```bash
+python scripts/batch_depth_results.py --root data/lerobot \
+  --cameras head left_wrist right_wrist --stage baseline --save-video
+```
+
+单个项目的结果仍写回该项目目录下的 `depth_results/`，与原有 `videos/`、`meta/` 并列；使用 `--stage all` 可在 baseline 后继续执行 refine，`--dry-run` 可先检查将处理的项目和视角。
 
 ### `refine_depth.py` — 分布迁移、验证与 RIFE 补帧
 
@@ -384,7 +392,7 @@ python scripts/analyze_depth.py \
 ```bash
 python scripts/refine_depth.py \
   --dataset-dir data/lerobot/leju_depth_preview/Leju_Kuavo_4_box_storage_parcel_0_qced_hardlink_ep000000 \
-  --statistics-dir data/lerobot/dataset/depth_statistics \
+  --result-root data/lerobot/dataset/depth_results \
   --camera head \
   --input-depth-suffix _depth \
   --mapping quantile \
@@ -400,14 +408,14 @@ T(x) = F_nested^-1(F_source(x))
 
 Earth Mover's Distance 在一维情况下等价于 Wasserstein-1 Distance。它在这里用于衡量迁移前后的分布差异；真正执行迁移的是上述分位数映射。`--mapping linear` 可作为 `a*x+b` 基线。
 
-验证结果写入 `depth_statistics/<camera>/<episode>/refine_parameters.json`，包括均值误差、P10/P50/P90、逐像素 MAE/RMSE、Wasserstein-1 距离及逐采样帧指标。只有 MAE、RMSE 和 Wasserstein 距离同时下降时，`improved` 才为 `true`。
+验证结果默认写入 `depth_results/refine/reports/<camera>/<episode>/`，包括均值误差、P10/P50/P90、逐像素 MAE/RMSE、Wasserstein-1 距离及逐采样帧指标。只有 MAE、RMSE 和 Wasserstein 距离同时下降时，`improved` 才为 `true`。
 
 确认多个 episode 的验证结果稳定后，再显式运行 RIFE 阶段：
 
 ```bash
 python scripts/refine_depth.py \
   --dataset-dir data/lerobot/leju_depth_preview/Leju_Kuavo_4_box_storage_parcel_0_qced_hardlink_ep000000 \
-  --statistics-dir data/lerobot/dataset/depth_statistics --camera head \
+  --result-root data/lerobot/dataset/depth_results --camera head \
   --input-depth-suffix _depth \
   --mapping quantile \
   --stage rife

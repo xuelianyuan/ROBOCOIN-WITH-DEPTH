@@ -106,6 +106,8 @@ def main() -> None:
     p.add_argument("--sample-count", type=int, default=20)
     p.add_argument("--strategy", default="da3_nested", choices=["da3_nested", "da3"])
     p.add_argument("--output-dir", default=None)
+    p.add_argument("--result-root", default=None,
+                   help="阶段化结果根目录；默认 <dataset>/depth_results")
     p.add_argument("--save-video", action="store_true", default=False)
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--crf", type=int, default=6)
@@ -121,7 +123,8 @@ def main() -> None:
     # 数据集通常包含 videos/、depth_statistics/ 等目录；所有相对路径
     # 均从用户传入的数据集根目录解析，便于把结果写入另一位置。
     root = Path(args.dataset_dir)
-    stats_root = Path(args.output_dir) if args.output_dir else root / "depth_statistics"
+    result_root = Path(args.result_root) if args.result_root else root / "depth_results"
+    stats_root = Path(args.output_dir) if args.output_dir else result_root / "baseline" / "statistics"
     videos_root = root / "videos"
     # LeRobot 版本差异较大：有的特征目录以 ``_rgb`` 结尾，有的直接使用
     # the camera feature name directly. Discover video directories from MP4s
@@ -148,7 +151,11 @@ def main() -> None:
         camera_name = rgb_dir.name.replace("observation.images.", "").replace("_rgb", "")
         if camera_name == rgb_dir.name and camera_name.endswith("rgb"):
             camera_name = camera_name[:-3].rstrip("_.")
-        sparse_dir = rgb_dir.parent / f"observation.images.{camera_name}_depth_nested_sparse"
+        if args.output_dir:
+            sparse_dir = rgb_dir.parent / f"observation.images.{camera_name}_depth_nested_sparse"
+        else:
+            sparse_dir = (result_root / "baseline" / "videos" / rgb_dir.parent.name /
+                          f"observation.images.{camera_name}_depth_nested_sparse")
         for video_path in sorted(rgb_dir.glob("episode_*.mp4")):
             episode = video_path.stem
             ep_out = stats_root / camera_name / episode

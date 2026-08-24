@@ -140,6 +140,10 @@ def main() -> None:
     p.add_argument("--camera", required=True)
     p.add_argument("--statistics-dir", default=None)
     p.add_argument("--output-dir", default=None)
+    p.add_argument("--result-root", default=None,
+                   help="阶段化结果根目录；默认 <dataset>/depth_results")
+    p.add_argument("--report-dir", default=None,
+                   help="refine 报告目录；默认 <result-root>/refine/reports")
     p.add_argument("--input-depth-suffix", default="_depth")
     p.add_argument("--input-pix-fmt", default="gray12le", choices=["gray12le", "gray16le"])
     p.add_argument("--mapping", default="quantile", choices=["quantile", "linear"],
@@ -157,8 +161,13 @@ def main() -> None:
     args = p.parse_args()
 
     root = Path(args.dataset_dir)
-    stat_root = Path(args.statistics_dir) if args.statistics_dir else root / "depth_statistics"
-    out_root = Path(args.output_dir) if args.output_dir else root / "videos"
+    result_root = Path(args.result_root) if args.result_root else root / "depth_results"
+    stat_root = (Path(args.statistics_dir) if args.statistics_dir
+                 else result_root / "baseline" / "statistics")
+    out_root = (Path(args.output_dir) if args.output_dir
+                else result_root / "refine" / "videos")
+    report_root = (Path(args.report_dir) if args.report_dir
+                   else result_root / "refine" / "reports")
     encoder = DepthVideoEncoder(args.fps, args.crf, args.preset)
     rgb_dirs = sorted({v.parent for v in (root / "videos").glob("**/episode_*.mp4")
                        if "depth" not in v.parent.name.lower()
@@ -197,10 +206,11 @@ def main() -> None:
                       "transferred": after, "improved": improved, "sample_indices": valid_ids,
                       "frame_metrics": [{"frame_index": i, "baseline": b, "transferred": a}
                                         for i, b, a in zip(valid_ids, frame_before, frame_after)]}
-            report_path = ep_out / "refine_parameters.json"
+            report_path = report_root / camera / source_path.stem / "refine_parameters.json"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
             report_path.write_text(json.dumps(report, indent=2))
             if args.plot_trend:
-                _plot_trend(ep_out / "refine_trend.png", valid_ids, frame_before, frame_after)
+                _plot_trend(report_path.with_name("refine_trend.png"), valid_ids, frame_before, frame_after)
             if args.stage == "validate":
                 processed += 1
                 continue
