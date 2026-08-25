@@ -1,5 +1,21 @@
 #!/usr/bin/env python3
-"""稀疏 DA3-Nested 分析，并保存原始深度、统计信息和可视化视频。"""
+"""RoboCOIN 深度分析工具。
+
+读取 LeRobot 数据集中的 RGB 相机视频，对每个 episode 均匀采样少量帧，
+使用 DA3-Nested（或 DA3 Metric）估计深度，并保存：
+
+* 采样深度帧（uint16 PNG/NPY，单位为毫米）；
+* 全局及逐帧统计信息（``statistics.json``）；
+* 可选的稀疏深度视频（12-bit H.265）。
+
+该脚本只生成稀疏 baseline，不会伪造完整时间轴。结果默认写入
+``<dataset-dir>/depth_results``，可交给 ``refine_depth.py`` 继续验证或修复。
+
+用法示例::
+
+    python scripts/analyze_depth.py --dataset-dir data/lerobot/my_dataset \\
+        --camera head --sample-count 20 --save-video
+"""
 
 from __future__ import annotations
 

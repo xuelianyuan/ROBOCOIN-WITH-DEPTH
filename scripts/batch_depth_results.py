@@ -5,6 +5,16 @@
 相机视角调用 ``analyze_depth.py`` 和 ``refine_depth.py``。每个项目的结果
 独立写入该项目下的 ``depth_results/baseline`` 和 ``depth_results/refine``，
 因此不会与原始 LeRobot 的 ``videos``、``meta`` 目录混在一起。
+
+用法示例::
+
+    python scripts/batch_depth_results.py \
+        --root data/lerobot \
+        --cameras head left_wrist right_wrist chest \
+        --stage all --save-video --refine-stage validate
+
+``baseline`` 先运行 ``analyze_depth.py``；``refine`` 需要已有 baseline
+统计；``all`` 按顺序执行两阶段。使用 ``--dry-run`` 可只检查将处理的项目。
 """
 from __future__ import annotations
 
@@ -14,7 +24,12 @@ import sys
 from pathlib import Path
 
 
-CAMERA_KEYS = {"head": "head", "left_wrist": "left_wrist", "right_wrist": "right_wrist"}
+CAMERA_KEYS = {
+    "head": "head",
+    "left_wrist": "left_wrist",
+    "right_wrist": "right_wrist",
+    "chest": "chest",
+}
 
 
 def has_camera(project: Path, camera: str) -> bool:
@@ -59,7 +74,7 @@ def main() -> None:
                         help="数据集根目录，默认：data/lerobot")
     parser.add_argument("--cameras", nargs="+", default=list(CAMERA_KEYS),
                         choices=sorted(CAMERA_KEYS),
-                        help="要处理的视角：head、left_wrist、right_wrist")
+                        help="要处理的视角：head、left_wrist、right_wrist、chest")
     parser.add_argument("--stage", choices=["baseline", "refine", "all"], default="baseline",
                         help="执行阶段：baseline、refine 或 all，默认：baseline")
     parser.add_argument("--sample-count", type=int, default=20,

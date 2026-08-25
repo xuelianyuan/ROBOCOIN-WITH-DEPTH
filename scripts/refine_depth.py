@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
-"""用 Nested 稀疏参考迁移深度分布，验证后可选 RIFE 补齐时间轴。"""
+"""用 Nested 稀疏参考迁移深度分布，验证后可选 RIFE 补齐时间轴。
+
+处理流程：先读取项目 ``videos/`` 下的原始 Metric 深度视频，再读取
+``depth_results/baseline/statistics/`` 中由 ``analyze_depth.py`` 生成的
+Nested 采样帧；使用 ``quantile`` 或 ``linear`` 拟合映射并写出验证报告。
+``validate`` 只评估，``full`` 将映射应用到每一帧，``rife`` 则用 RIFE
+把迁移后的稀疏关键帧补齐为完整视频。
+
+用法示例::
+
+    python scripts/refine_depth.py \
+        --dataset-dir data/lerobot/your_dataset \
+        --result-root data/lerobot/your_dataset/depth_results \
+        --camera head --mapping quantile --stage validate --plot-trend
+
+输出：报告位于 ``depth_results/refine/reports/``，生成的视频位于
+``depth_results/refine/videos/``。
+"""
 from __future__ import annotations
 
 import argparse
@@ -9,6 +26,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.depth_encoder import DepthVideoEncoder
@@ -46,6 +64,12 @@ def _decode(path: Path, pix_fmt: str) -> list[np.ndarray]:
 
 
 def _valid_pair(pred: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    # Nested 输出尺寸可能与原始深度视频不同；将参考深度缩放到源帧尺寸后
+    # 才能建立逐像素对应关系。深度是连续数值，使用线性插值而非 RGB 插值。
+    if pred.shape != target.shape:
+        target = cv2.resize(target.astype(np.float32),
+                            (pred.shape[1], pred.shape[0]),
+                            interpolation=cv2.INTER_LINEAR)
     mask = np.isfinite(pred) & np.isfinite(target) & (pred > 0) & (target > 0)
     return pred[mask].astype(np.float64), target[mask].astype(np.float64)
 
