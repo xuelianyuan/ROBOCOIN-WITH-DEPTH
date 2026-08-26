@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""对比原始 Metric、Refined Metric 和原始 Nested 深度。
+"""渲染 Original、DA3 LARGE 和 DA3 NESTED 三种结果的横向点云图、深度图、直方图。
 
 脚本读取同一项目、同一 episode 的原始 Metric 视频、Refined 视频以及
-对应 Nested ``.npy`` 采样帧，生成一张 2x3 对比图：上排是三张灰度图，
-下排是使用相同深度范围和 bins 的三个直方图。
+对应 Nested ``.npy`` 采样帧，生成一张 3x3 对比图：第一排是使用相同
+相机内参、视角和坐标范围的点云，第二排是深度图，第三排是使用相同
+深度范围和 bins 的直方图。
 
 用法示例::
 
@@ -70,6 +71,32 @@ def decode(path: Path, pix_fmt: str = "gray12le") -> list[np.ndarray]:
             for i in range(0, len(raw) - size + 1, size)]
 
 
+def depth_to_pointcloud(
+    depth: np.ndarray, K: np.ndarray, stride: int, max_depth: float,
+) -> np.ndarray:
+    """将毫米深度图投影为相机坐标系中的米制 XYZ 点云。"""
+    height, width = depth.shape
+    vv, uu = np.mgrid[0:height:stride, 0:width:stride]
+    z_mm = depth[::stride, ::stride]
+    valid = (z_mm > 0) & (z_mm <= max_depth) & np.isfinite(z_mm)
+    z = z_mm[valid] / 1000.0
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    x = (uu[valid] - cx) * z / fx
+    y = (vv[valid] - cy) * z / fy
+    return np.column_stack((x, y, z))
+
+
+def shared_pointcloud_bounds(pointclouds: tuple[np.ndarray, ...]):
+    """计算三组点云共同使用的立方体显示范围。"""
+    valid = [points for points in pointclouds if len(points)]
+    if not valid:
+        return np.zeros(3), 1.0
+    combined = np.concatenate(valid, axis=0)
+    center = (combined.min(axis=0) + combined.max(axis=0)) / 2
+    half = max(np.ptp(combined, axis=0).max() / 2 * 1.05, 1e-3)
+    return center, half
+
+
 def main() -> None:
     configure_chinese_font()
     parser = argparse.ArgumentParser(description="绘制 Metric、Refined Metric、Nested 对比图")
@@ -85,7 +112,17 @@ def main() -> None:
     parser.add_argument("--output", default=None, help="输出 PNG 路径")
     parser.add_argument("--max-depth", type=float, default=4095,
                         help="直方图和灰度显示的最大深度，默认 4095 mm")
+    parser.add_argument("--fx", type=float, default=605.0, help="相机水平焦距，默认 605")
+    parser.add_argument("--fy", type=float, default=605.0, help="相机垂直焦距，默认 605")
+    parser.add_argument("--cx", type=float, default=323.0, help="相机主点 x，默认 323")
+    parser.add_argument("--cy", type=float, default=252.0, help="相机主点 y，默认 252")
+    parser.add_argument("--pcd-stride", type=int, default=3,
+                        help="点云像素采样步长，默认 3")
+    parser.add_argument("--azim", type=float, default=45.0, help="点云方位角，默认 45")
+    parser.add_argument("--elev", type=float, default=25.0, help="点云俯仰角，默认 25")
     args = parser.parse_args()
+    if args.pcd_stride < 1:
+        parser.error("--pcd-stride 必须大于等于 1")
 
     before_path, after_path = Path(args.before), Path(args.after)
     if args.all_sampled:
@@ -113,6 +150,10 @@ def main() -> None:
                 "--before", str(before_path), "--after", str(after_path),
                 "--nested", str(nested_frame), "--frame", str(int(frame)),
                 "--output", str(output), "--max-depth", str(args.max_depth),
+                "--fx", str(args.fx), "--fy", str(args.fy),
+                "--cx", str(args.cx), "--cy", str(args.cy),
+                "--pcd-stride", str(args.pcd_stride),
+                "--azim", str(args.azim), "--elev", str(args.elev),
             ]
             subprocess.run([sys.executable, __file__, *command], check=True)
         return
@@ -137,6 +178,10 @@ def main() -> None:
         if args.frame >= len(nested_frames):
             raise SystemExit(f"Nested 视频帧号超出范围：{len(nested_frames)}")
         n = nested_frames[args.frame].astype(float)
+    if not (b.shape == a.shape == n.shape):
+        raise SystemExit(
+            f"三组深度图尺寸必须一致：before={b.shape}, after={a.shape}, nested={n.shape}"
+        )
     if args.output:
         output = Path(args.output)
     else:
@@ -150,21 +195,55 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
 
     images = (b, a, n)
-    titles = ("原始 Metric", "Refined Metric（Nested 统计迁移）", "原始 Nested")
+    titles = ("Original", "DA3 LARGE", "DA3 NESTED")
     colors = ("tab:blue", "tab:green", "tab:orange")
-    fig, axes = plt.subplots(2, 3, figsize=(20, 9), constrained_layout=True)
-    for ax, image, title in zip(axes[0], images, titles):
+    K = np.array([
+        [args.fx, 0, args.cx],
+        [0, args.fy, args.cy],
+        [0, 0, 1],
+    ], dtype=np.float64)
+    pointclouds = tuple(
+        depth_to_pointcloud(image, K, args.pcd_stride, args.max_depth)
+        for image in images
+    )
+    center, half = shared_pointcloud_bounds(pointclouds)
+
+    fig = plt.figure(figsize=(20, 15.5), constrained_layout=True)
+    grid = fig.add_gridspec(3, 3, height_ratios=(1.25, 1, 1))
+    axes = np.empty((3, 3), dtype=object)
+    for col, (points, title) in enumerate(zip(pointclouds, titles)):
+        ax = fig.add_subplot(grid[0, col], projection="3d")
+        axes[0, col] = ax
+        if len(points):
+            ax.scatter(points[:, 0], points[:, 1], points[:, 2],
+                       c=points[:, 2], cmap="turbo", s=0.35,
+                       vmin=0, vmax=args.max_depth / 1000.0,
+                       depthshade=False, rasterized=True)
+        ax.set_xlim(center[0] - half, center[0] + half)
+        ax.set_ylim(center[1] - half, center[1] + half)
+        ax.set_zlim(center[2] - half, center[2] + half)
+        ax.view_init(elev=args.elev, azim=args.azim)
+        ax.set_box_aspect((1, 1, 1))
+        ax.set_title(f"{title} 点云 | {len(points):,} points")
+        ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)"); ax.set_zlabel("Z (m)")
+        ax.tick_params(labelsize=7)
+
+    for col, (image, title) in enumerate(zip(images, titles)):
+        ax = fig.add_subplot(grid[1, col])
+        axes[1, col] = ax
         display = np.ma.masked_where((image <= 0) | (image > args.max_depth), image)
         ax.imshow(display, cmap="gray", vmin=0, vmax=args.max_depth)
-        ax.set_title(f"{title} 灰度图 | frame {args.frame}")
+        ax.set_title(f"{title} 深度图 | frame {args.frame}")
         ax.axis("off")
     bins = np.linspace(0, args.max_depth, 101)
-    for ax, image, title, color in zip(axes[1], images, titles, colors):
+    for col, (image, title, color) in enumerate(zip(images, titles, colors)):
+        ax = fig.add_subplot(grid[2, col])
+        axes[2, col] = ax
         valid = image[(image > 0) & (image <= args.max_depth)]
         ax.hist(valid, bins=bins, color=color, alpha=.75)
         ax.set_title(f"{title}直方图 | 有效像素 {len(valid)}")
         ax.set_xlabel("深度 (mm)"); ax.set_ylabel("像素数"); ax.grid(alpha=.25)
-    fig.suptitle("原始 Metric / Refined Metric / 原始 Nested 深度对比")
+    fig.suptitle("Original / DA3 LARGE / DA3 NESTED 点云与深度对比")
     fig.savefig(output, dpi=160)
     plt.close(fig)
     print(f"对比图已保存：{output}")
