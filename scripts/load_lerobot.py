@@ -12,9 +12,11 @@ from pathlib import Path
 
 import numpy as np
 
+# ==================== 路径与基础依赖 ====================
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
+# ==================== 图像与深度数据转换 ====================
 def _to_hwc(rgb):
     if hasattr(rgb, "numpy"):
         rgb = rgb.numpy()
@@ -36,6 +38,7 @@ def _depth_to_color(depth):
     return cv2.applyColorMap(d, cv2.COLORMAP_TURBO)
 
 
+# ==================== 点云渲染器 ====================
 def _make_pcd_renderer(H=480, W=640):
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -99,6 +102,7 @@ def _make_pcd_renderer(H=480, W=640):
     return render
 
 
+# ==================== 点云文件保存 ====================
 def _save_pcd_all(sample, cameras, state, out_dir):
     """保存所有相机的点云为 PCD 文件。"""
     out = Path(out_dir)
@@ -162,7 +166,9 @@ def _cam_from_key(key: str) -> str:
     return key.rsplit(".", 1)[-1].replace("_rgb", "")
 
 
+# ==================== 主程序：参数、数据集与窗口初始化 ====================
 def main():
+    # ---------- 命令行参数 ----------
     parser = argparse.ArgumentParser(description="LeRobot 数据集可视化")
     parser.add_argument("--repo-id", required=True)
     parser.add_argument("--root", default="data/lerobot")
@@ -175,6 +181,7 @@ def main():
                         help="PCD 保存目录（按 's' 键保存当前帧）")
     args = parser.parse_args()
 
+    # ---------- 加载数据集 ----------
     if args.native:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
         ds = LeRobotDataset(args.repo_id, root=args.root)
@@ -190,6 +197,7 @@ def main():
     if has_pcd:
         print("PCD: w/s elev, a/d azim, p save PCD")
 
+    # ---------- 解析相机与初始帧 ----------
     rgb_keys = sorted(k for k in ds.features if "rgb" in k and "images" in k)
     cameras = [_cam_from_key(k) for k in rgb_keys]
     if args.camera != "all":
@@ -199,6 +207,7 @@ def main():
     ep_to = int(ds.episode_data_index["to"][args.episode])
     state = {"ep": args.episode, "fi": min(ep_from + args.frame, ep_to - 1)}
 
+    # ---------- 创建 RGB、深度和点云显示窗口 ----------
     import matplotlib.pyplot as plt
 
     n_rows = len(cameras)
@@ -224,6 +233,7 @@ def main():
     render_pcd = _make_pcd_renderer() if has_pcd else None
     pcd_view = {"azim": 45, "elev": 25}
 
+    # ---------- 界面刷新与键盘交互 ----------
     def _redraw():
         ep = state["ep"]
         ep0 = int(ds.episode_data_index["from"][ep])
