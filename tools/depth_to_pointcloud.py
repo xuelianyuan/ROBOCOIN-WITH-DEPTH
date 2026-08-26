@@ -130,7 +130,9 @@ def depth_to_pointcloud(
     uu, vv = np.meshgrid(u, v)
 
     d = depth[vv, uu].astype(np.float32) * depth_scale
-    valid = (d > 0) & np.isfinite(d) & (d < max_depth_mm * depth_scale)
+    # 应用 ``depth_scale`` 后，``d`` 已转换为目标单位；
+    # 物理距离的截断阈值不应随编码缩放比例变化。
+    valid = (d > 0) & np.isfinite(d) & (d < max_depth_mm)
 
     z = d[valid] / 1000.0  # mm → m
     x = (uu[valid] - cx) * z / fx

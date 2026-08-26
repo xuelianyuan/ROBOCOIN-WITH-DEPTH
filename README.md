@@ -178,6 +178,84 @@ pip install loguru
 # 对于其他策略，如 VDA 或 LingBot-Depth，请参考各自的安装说明
 ```
 
+### 点云读取与可视化
+
+点云由同一相机的 RGB、深度图和相机内参实时生成。读取前请确保已完成上面的基础安装，并额外安装可视化依赖：
+
+```bash
+conda activate robocoin-depth
+pip install matplotlib opencv-python
+```
+
+确认当前 Python 和关键依赖来自同一个 conda 环境：
+
+```bash
+which python
+python -m pip show lerobot torchcodec
+ffmpeg -version
+```
+
+#### 1. 选择单个 LeRobot 数据集
+
+`--root` 必须直接指向包含 `meta/info.json`、`data/` 和 `videos/` 的单个数据集目录，不能指向包含多个数据集的集合目录（例如 `data/lerobot/ai2_depth_preview`）。可用下面的命令列出数据集：
+
+```bash
+find data/lerobot -path '*/meta/info.json' -print
+```
+
+例如：
+
+```bash
+DATASET=data/lerobot/ai2_depth_preview/AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000
+test -f "$DATASET/meta/info.json" && echo "metadata ok"
+```
+
+#### 2. 检查数据集格式版本
+
+```bash
+grep 'codebase_version' "$DATASET/meta/info.json"
+```
+
+LeRobot 0.4.x 默认读取 v3.0。若数据集是 v2.1，可以使用与 v2.1 兼容的环境读取；也可以先备份，然后使用 LeRobot 自带转换器迁移：
+
+```bash
+cp -a "$DATASET" "${DATASET}_v21_backup"
+
+python -m lerobot.datasets.v30.convert_dataset_v21_to_v30 \
+  --repo-id AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000 \
+  --root data/lerobot/ai2_depth_preview
+```
+
+转换器的 `--root` 是数据集的父目录，而下面可视化脚本的 `--root` 是数据集目录本身。不要只修改 `meta/info.json` 中的版本号。
+
+#### 3. 启动点云可视化
+
+```bash
+python scripts/load_lerobot.py \
+  --repo-id AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000 \
+  --root "$DATASET" \
+  --camera all
+```
+
+交互操作：
+
+- 在 PCD 区域按住鼠标左键拖动，旋转点云
+- `a` / `d` 调整方位角，`w` / `s` 调整俯仰角
+- `←` / `→` 切换帧，`Shift` 或 `Ctrl` 配合方向键快速跳转
+- `↑` / `↓` 切换 episode，`q` 或 `Esc` 退出
+- 添加 `--save-pcd pcd_output` 后，在窗口中按 `p` 保存当前帧的 `.pcd` 文件
+
+只验证原生 RGB 和深度读取、不生成点云时，使用：
+
+```bash
+python scripts/load_lerobot.py \
+  --repo-id AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000 \
+  --root "$DATASET" \
+  --native
+```
+
+若本地读取时出现 Hugging Face `401`，通常并非登录问题，而是 `--root/meta/info.json` 不存在，LeRobot 随后把 `--repo-id` 当成远程仓库名尝试下载。请重新检查 `--root` 是否直接指向单个数据集。
+
 ## 快速开始
 
 假设你已经有一个 LeRobot 数据集，目录结构如下：
@@ -349,81 +427,166 @@ python scripts/create_lerobot_dataset_with_depth.py \
 ### `load_lerobot.py` — 可视化
 
 ```bash
-python scripts/load_lerobot.py --repo-id test --camera all
+DATASET=data/lerobot/ai2_depth_preview/AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000
+python scripts/load_lerobot.py \
+    --repo-id AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000 \
+    --root "$DATASET" --camera all
 ```
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
-| `--repo-id` / `--root` | 数据集 ID / 根目录 | 必填 / data/lerobot |
+| `--repo-id` / `--root` | 数据集 ID / 包含 `meta/info.json` 的数据集目录 | 必填 / data/lerobot |
 | `--episode` / `--frame` | episode 索引 / 帧索引 | 0 / 0 |
 | `--camera` | head / right / all | all |
+| `--native` | 只使用原生 LeRobot，不生成点云 | False |
+| `--save-pcd` | 按 `p` 保存当前帧点云的输出目录 | 不保存 |
 
-### `analyze_depth.py` — DA3-Nested 稀疏分析
+## 深度处理 Pipeline
 
-对每个 episode 均匀采样少量帧，运行 DA3-Nested，并保存 `uint16` 毫米深度 PNG/NPY、采样索引和统计 JSON。统计文件额外保存 101 个分位点，供后续一维最优传输（直方图匹配）使用。可选的 `gray12le` 稀疏视频只用于查看采样结果，不代表完整时间轴。
+单项目的结果默认写入 `<dataset-dir>/depth_results`，处理流程如下：
+
+`analyze_depth.py` 生成稀疏 baseline → `refine_depth.py` 验证并生成 refined 视频 → `plot_depth_comparison.py` 对比结果。
+
+### 1. Baseline：DA3-Nested 稀疏分析 (`analyze_depth.py`)
+
+对 RGB 视频均匀采样并运行 DA3-Nested，保存采样深度帧、统计 JSON 和可选稀疏视频。
 
 ```bash
 python scripts/analyze_depth.py \
-    --dataset-dir data/lerobot/leju_depth_preview/Leju_Kuavo_4_box_storage_parcel_0_qced_hardlink_ep000000 \
+    --dataset-dir data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
     --camera head \
     --sample-count 20 \
     --strategy da3_nested \
     --save-video \
-    --result-root data/lerobot/dataset/depth_results
+    --result-root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results
 ```
 
-该脚本会扫描数据集中的全部 episode RGB 视频，对均匀采样帧运行 DA3-Nested，并保存逐帧统计值（有效像素数、均值、方差、P10/P50/P90 和分位数曲线）及汇总统计。若要更新已有结果，增加 `--force`。
+结果目录：`baseline/statistics`、`baseline/videos`、`refine/reports`、`refine/videos`。
 
-默认输出按阶段分层，便于对比：`depth_results/baseline/statistics/<camera>/<episode>/` 保存 Nested PNG/NPY、统计与 manifest，`depth_results/baseline/videos/` 保存稀疏视频；`depth_results/refine/reports/<camera>/<episode>/` 保存 refine 报告，`depth_results/refine/videos/` 保存 refined 视频。可用 `--result-root` 更换根目录；显式传入旧的 `--output-dir` 或 `--statistics-dir` 时仍按指定目录工作。PNG 和 NPY 均为 `uint16` 毫米深度；后续迁移以无损 NPY 为参考，不以压缩视频作为拟合数据源。
+### 2. 批量处理多个项目 (`batch_depth_results.py`)
 
-如需一次扫描 `data/lerobot` 下的全部项目，可使用批处理器（默认 head、left_wrist、right_wrist）：
+如需一次扫描 `data/lerobot` 下的全部项目，可使用批处理器（默认 head、left_wrist、right_wrist、chest）：
 
 ```bash
 python scripts/batch_depth_results.py --root data/lerobot \
-  --cameras head left_wrist right_wrist --stage baseline --save-video
+  --cameras head left_wrist right_wrist chest --stage baseline --save-video
 ```
 
-单个项目的结果仍写回该项目目录下的 `depth_results/`，与原有 `videos/`、`meta/` 并列；使用 `--stage all` 可在 baseline 后继续执行 refine，`--dry-run` 可先检查将处理的项目和视角。
+使用 `--stage all` 可批量执行 baseline 和 refine，`--dry-run` 可预览项目。
 
-### `refine_depth.py` — 分布迁移、验证与 RIFE 补帧
+支持的视角为 `head`、`left_wrist`、`right_wrist` 和 `chest`。例如只处理 chest 视角：
 
-该流程严格分为两步。第一步只比较原深度视频的采样帧和对应 Nested 深度，学习迁移函数并写出指标，不生成最终视频：
+```bash
+python scripts/batch_depth_results.py \
+  --root data/lerobot \
+  --cameras chest \
+  --stage all \
+  --save-video \
+  --refine-stage full
+```
+### 3. Validate：验证迁移是否有效 (`refine_depth.py`)
+
+先使用采样帧拟合 Metric 到 Nested 的映射，只生成报告，不生成视频：
 
 ```bash
 python scripts/refine_depth.py \
-  --dataset-dir data/lerobot/leju_depth_preview/Leju_Kuavo_4_box_storage_parcel_0_qced_hardlink_ep000000 \
-  --result-root data/lerobot/dataset/depth_results \
-  --camera head \
-  --input-depth-suffix _depth \
-  --mapping quantile \
-  --stage validate
-  --plot-trend
+  --dataset-dir data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
+  --result-root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
+  --camera head --input-depth-suffix _depth \
+  --mapping quantile --stage validate --plot-trend
 ```
 
-`quantile` 使用一维最优传输的分位数映射：
+报告写入 `depth_results/refine/reports/<camera>/<episode>/`；确认 `improved` 后再生成视频。
 
-```text
-T(x) = F_nested^-1(F_source(x))
-```
+### 4. 生成 Refined 视频 (`refine_depth.py`)
 
-Earth Mover's Distance 在一维情况下等价于 Wasserstein-1 Distance。它在这里用于衡量迁移前后的分布差异；真正执行迁移的是上述分位数映射。`--mapping linear` 可作为 `a*x+b` 基线。
-
-验证结果默认写入 `depth_results/refine/reports/<camera>/<episode>/`，包括均值误差、P10/P50/P90、逐像素 MAE/RMSE、Wasserstein-1 距离及逐采样帧指标。只有 MAE、RMSE 和 Wasserstein 距离同时下降时，`improved` 才为 `true`。
-
-确认多个 episode 的验证结果稳定后，再显式运行 RIFE 阶段：
+直接将映射应用到原深度视频的每一帧：
 
 ```bash
 python scripts/refine_depth.py \
-  --dataset-dir data/lerobot/leju_depth_preview/Leju_Kuavo_4_box_storage_parcel_0_qced_hardlink_ep000000 \
-  --result-root data/lerobot/dataset/depth_results --camera head \
-  --input-depth-suffix _depth \
-  --mapping quantile \
-  --stage rife
+  --dataset-dir data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
+  --result-root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
+  --camera head --input-depth-suffix _depth \
+  --mapping quantile --stage full
 ```
 
-RIFE 在对应 RGB 关键帧之间估算光流，将迁移后的稀疏深度关键帧 warp 到全部原始帧位置。输出帧数严格等于 RGB/原深度视频帧数，并写入 `observation.images.<camera>_depth_refined`。指标未同时改善时脚本默认拒绝生成视频；仅在人工检查并接受风险后使用 `--allow-unvalidated`。
+使用 RIFE 将迁移后的稀疏关键帧补齐到完整时间轴：
 
-如需直接把同一个映射应用到原深度视频的每一帧，而不是使用 RIFE，可指定 `--stage full`。输入为 16-bit 深度视频时使用 `--input-pix-fmt gray16le`。
+```bash
+python scripts/refine_depth.py \
+  --dataset-dir data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
+  --result-root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
+  --camera head --input-depth-suffix _depth \
+  --mapping quantile --stage rife
+```
+
+`full` 是逐帧映射的 Metric 视频；`rife` 是迁移关键帧经 RIFE 补齐的视频。
+
+### 5. 三路点云、深度图与直方图对比 (`plot_depth_comparison.py`)
+
+生成 refined 视频后，可绘制 Original、DA3 LARGE 和 DA3 NESTED 三路结果。输出为 3×3 对比图：
+
+- 第一排：三路深度投影得到的点云
+- 第二排：三路深度图
+- 第三排：三路深度直方图
+
+三个点云使用相同的相机内参、观察角度和坐标范围，因此点云大小和距离差异可以直接横向比较。
+
+```bash
+python scripts/plot_depth_comparison.py \
+  --before data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_head_depth/episode_000000.mp4 \
+  --after data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined/episode_000000.mp4 \
+  --nested data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/statistics/cam_front_head/episode_000000/frame_000000000.npy \
+  --frame 0
+```
+
+单帧使用对应的 `frame_<index>.npy`；批量使用 `--nested-dir ... --all-sampled`。图片保存到 `depth_results/refine/plots/`。
+
+默认相机内参和点云参数与 `load_lerobot.py` 一致：
+
+| 参数 | 说明 | 默认值 |
+|---|---|---:|
+| `--fx` / `--fy` | 水平/垂直焦距 | 605 / 605 |
+| `--cx` / `--cy` | 相机主点坐标 | 323 / 252 |
+| `--pcd-stride` | 点云像素采样步长，越小越密集 | 3 |
+| `--azim` / `--elev` | 点云方位角/俯仰角（度） | 45 / 25 |
+| `--max-depth` | 深度图、直方图和点云的最大有效深度（mm） | 4095 |
+
+如有真实相机标定参数，应通过命令行覆盖默认内参：
+
+```bash
+python scripts/plot_depth_comparison.py \
+  --before <original_depth.mp4> \
+  --after <da3_large_depth.mp4> \
+  --nested <da3_nested_frame.npy> \
+  --frame 0 --output comparison.png \
+  --fx 605 --fy 605 --cx 323 --cy 252 \
+  --pcd-stride 3 --azim 45 --elev 25
+```
+
+如需根据一个 episode 的全部 Nested 采样帧批量生成对比图，使用 `--nested-dir` 指定 baseline 统计目录，并添加 `--all-sampled`：
+
+```bash
+python scripts/plot_depth_comparison.py \
+  --before <项目>/videos/chunk-000/observation.images.cam_front_head_depth/episode_000000.mp4 \
+  --after <项目>/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined/episode_000000.mp4 \
+  --nested-dir <项目>/depth_results/baseline/statistics/cam_front_head/episode_000000 \
+  --all-sampled
+```
+
+脚本会读取该目录的 `sample_indices.json`，逐一加载对应的 `frame_<index>.npy`，并将图片保存到 `depth_results/refine/plots/`。
+
+三个对比项来源如下：
+
+| 图中标题 | 来源 |
+|---|---|
+| Original | `--before` 指定的原始深度视频 |
+| DA3 LARGE | `--after` 指定的 refined 深度视频 |
+| DA3 NESTED | `--nested` 指定的 `DA3NESTED-GIANT-LARGE-1.1` 稀疏参考深度 |
+
+点云坐标单位为米，输入深度单位必须为毫米。三路深度图的宽高必须一致；脚本在尺寸不一致时会停止并报告各输入尺寸，避免产生错误的几何对比。
+
+默认映射为 `quantile`，也可用 `--mapping linear`；16-bit 输入使用 `--input-pix-fmt gray16le`。
 
 #### 理论解释与方案比较
 

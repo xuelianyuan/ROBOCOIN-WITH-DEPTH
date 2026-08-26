@@ -3,10 +3,13 @@
 LeRobot 数据集可视化：RGB + Depth + Point Cloud（方向键切换帧）。
 
 用法:
-    python scripts/load_lerobot.py --repo-id test --root data/lerobot/dataset
+python scripts/load_lerobot.py \
+    --repo-id AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
+    --root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -166,6 +169,22 @@ def _cam_from_key(key: str) -> str:
     return key.rsplit(".", 1)[-1].replace("_rgb", "")
 
 
+def _camera_from_depth_path(path: Path) -> str:
+    match = re.fullmatch(r"observation\.images\.(.+)_depth(?:_refined)?", path.parent.name)
+    if match is None:
+        raise ValueError(f"无法从深度视频目录解析相机名: {path.parent.name}")
+    return match.group(1)
+
+
+def _decode_external_depth(path: Path, frame_index: int, fps: float, backend: str):
+    from src.video_utils import decode_video_frames
+
+    depth = decode_video_frames(path, [frame_index / fps], 1.0 / fps, backend).squeeze(0)
+    if depth.ndim == 3:
+        depth = depth[0]
+    return depth
+
+
 # ==================== 主程序：参数、数据集与窗口初始化 ====================
 def main():
     # ---------- 命令行参数 ----------
@@ -179,7 +198,14 @@ def main():
                         help="使用原生 LeRobotDataset（无 PCD）")
     parser.add_argument("--save-pcd", default=None,
                         help="PCD 保存目录（按 's' 键保存当前帧）")
+    parser.add_argument("--compare-depth-before", type=Path,
+                        help="比较模式：refine 前的深度视频")
+    parser.add_argument("--compare-depth-after", type=Path,
+                        help="比较模式：refine 后的深度视频")
     args = parser.parse_args()
+
+    if bool(args.compare_depth_before) != bool(args.compare_depth_after):
+        parser.error("--compare-depth-before 和 --compare-depth-after 必须同时提供")
 
     # ---------- 加载数据集 ----------
     if args.native:
@@ -197,6 +223,19 @@ def main():
     if has_pcd:
         print("PCD: w/s elev, a/d azim, p save PCD")
 
+    if args.compare_depth_before:
+        before_cam = _camera_from_depth_path(args.compare_depth_before)
+        after_cam = _camera_from_depth_path(args.compare_depth_after)
+        if before_cam != after_cam:
+            parser.error(
+                "before/after 必须来自同一相机，当前分别为 "
+                f"{before_cam!r} 和 {after_cam!r}"
+            )
+        for path in (args.compare_depth_before, args.compare_depth_after):
+            if not path.is_file():
+                parser.error(f"深度视频不存在: {path}")
+        args.camera = before_cam
+
     # ---------- 解析相机与初始帧 ----------
     rgb_keys = sorted(k for k in ds.features if "rgb" in k and "images" in k)
     cameras = [_cam_from_key(k) for k in rgb_keys]
@@ -210,14 +249,24 @@ def main():
     # ---------- 创建 RGB、深度和点云显示窗口 ----------
     import matplotlib.pyplot as plt
 
-    n_rows = len(cameras)
-    n_cols = 3 if has_pcd else 2
+    compare_mode = args.compare_depth_before is not None
+    n_rows = 2 if compare_mode else len(cameras)
+    n_cols = 2 if compare_mode else (3 if has_pcd else 2)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 5 * n_rows))
     if n_rows == 1:
         axes = [axes]
 
     imgs = {}
-    for ri, cam in enumerate(cameras):
+    for ri, cam in enumerate(cameras if not compare_mode else [cameras[0], cameras[0]]):
+        if compare_mode:
+            label = "Before" if ri == 0 else "After (refined)"
+            imgs[(ri, 0)] = axes[ri][0].imshow(np.zeros((480, 640, 3), dtype=np.uint8))
+            axes[ri][0].set_title(f"{label} Depth", fontsize=10)
+            axes[ri][0].set_axis_off()
+            imgs[(ri, 1)] = axes[ri][1].imshow(np.zeros((480, 640, 3), dtype=np.uint8))
+            axes[ri][1].set_title(f"{label} PCD", fontsize=10)
+            axes[ri][1].set_axis_off()
+            continue
         imgs[(ri, 0)] = axes[ri][0].imshow(np.zeros((480, 640, 3), dtype=np.uint8))
         axes[ri][0].set_title(f"{cam} RGB", fontsize=10)
         axes[ri][0].set_axis_off()
@@ -232,6 +281,7 @@ def main():
     title = plt.suptitle("", fontsize=14)
     render_pcd = _make_pcd_renderer() if has_pcd else None
     pcd_view = {"azim": 45, "elev": 25}
+    drag = {"active": False, "x": 0.0, "y": 0.0}
 
     # ---------- 界面刷新与键盘交互 ----------
     def _redraw():
@@ -241,6 +291,25 @@ def main():
         fi = state["fi"]
         sample = ds[fi]
         state["_sample"] = sample
+
+        if compare_mode:
+            local_fi = fi - ep0
+            cam = cameras[0]
+            rgb = sample[f"observation.images.{cam}_rgb"]
+            cfg = ds._pcd_cameras.get(cam.replace("cam_", ""), {})
+            K = cfg.get("K", np.array([[605, 0, 323], [0, 605, 252], [0, 0, 1]], dtype=np.float32))
+            for ri, path in enumerate((args.compare_depth_before, args.compare_depth_after)):
+                depth = _decode_external_depth(path, local_fi, ds.fps, ds.video_backend)
+                pts = ds._depth_to_pointcloud(depth, K, rgb=rgb, stride=ds._pcd_stride)
+                imgs[(ri, 0)].set_data(_depth_to_color(depth))
+                imgs[(ri, 1)].set_data(render_pcd(
+                    pts, azim=pcd_view["azim"], elev=pcd_view["elev"]
+                ))
+            title.set_text(
+                f"{cam} Before vs Refined | Episode {ep} | Frame {local_fi}/{ep1 - ep0 - 1}"
+            )
+            fig.canvas.draw_idle()
+            return
 
         for ri, cam in enumerate(cameras):
             rgb_key = f"observation.images.{cam}_rgb"
@@ -302,6 +371,27 @@ def main():
         _redraw()
 
     fig.canvas.mpl_connect("key_press_event", _on_key)
+
+    def _on_press(event):
+        pcd_col = 1 if compare_mode else 2
+        if has_pcd and event.inaxes in [axes[ri][pcd_col] for ri in range(n_rows)] and event.button == 1:
+            drag.update(active=True, x=event.x, y=event.y)
+
+    def _on_motion(event):
+        if not (has_pcd and drag["active"] and event.x is not None and event.y is not None):
+            return
+        dx, dy = event.x - drag["x"], event.y - drag["y"]
+        drag.update(x=event.x, y=event.y)
+        pcd_view["azim"] = (pcd_view["azim"] + dx * 0.5) % 360
+        pcd_view["elev"] = float(np.clip(pcd_view["elev"] + dy * 0.5, -85, 85))
+        _redraw()
+
+    def _on_release(event):
+        drag["active"] = False
+
+    fig.canvas.mpl_connect("button_press_event", _on_press)
+    fig.canvas.mpl_connect("motion_notify_event", _on_motion)
+    fig.canvas.mpl_connect("button_release_event", _on_release)
     _redraw()
     plt.show()
 
