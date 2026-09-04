@@ -69,6 +69,10 @@ def _generate_pcd_videos(depth_paths, pcd_root, rgb_path=None, stride=2,
             rgb = videos[0] if len(videos) == 1 else rgb
         if not rgb.is_file():
             raise FileNotFoundError(f"未找到对应 RGB 视频，请用 --rgb-video 指定: {rgb}")
+        camera_key = depth_path.parent.name.replace("observation.images.", "")
+        camera_key = re.sub(r"_depth(?:_nested_sparse|_refined)?$", "", camera_key)
+        if not camera_key:
+            raise ValueError(f"无法从深度路径解析相机 key: {depth_path}")
         print(f"[{kind}] decoding {depth_path}")
         depths = read_depth_video(str(depth_path))
         rgbs = read_rgb_video(str(rgb))
@@ -92,7 +96,9 @@ def _generate_pcd_videos(depth_paths, pcd_root, rgb_path=None, stride=2,
             rgbs = [rgbs[j] for j in frame_names]
             print(f"[{kind}] using source frame indices from {manifest}")
         n = min(len(depths), len(rgbs), len(frame_names))
-        out_dir = _pcd_dataset_output_root(depth_path, pcd_root) / kind
+        # Keep camera identity in the output path; otherwise head/left/right
+        # runs overwrite or get misidentified as the same point cloud.
+        out_dir = _pcd_dataset_output_root(depth_path, pcd_root) / kind / camera_key
         out_dir.mkdir(parents=True, exist_ok=True)
         for i in range(n):
             pts, cols = depth_to_pointcloud(depths[i], rgbs[i], stride=stride,
