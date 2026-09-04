@@ -35,6 +35,8 @@ tests/output/
 # Jupyter
 .ipynb_checkpoints/
 
+# Point-cloud data
+pcd/ 
 pcds/
 
 log.txt
