@@ -6,9 +6,20 @@ LeRobot 数据集可视化：RGB + Depth + Point Cloud（方向键切换帧）�
 python scripts/load_lerobot.py \
     --repo-id AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
     --root data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000
+
+python scripts/load_lerobot.py \
+  --generate-pcd \
+  --pcd-root pcd \
+  --original-depth "/home/user/RoboCOIN-with-Depth/data/original/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_depth" \
+  --baseline-depth "/home/user/RoboCOIN-with-Depth/data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/videos/chunk-000/observation.images.cam_front_chest_depth_nested_sparse" \
+  --refine-depth "/home/user/RoboCOIN-with-Depth/data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_depth" \
+  --rgb-video "/home/user/RoboCOIN-with-Depth/data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_rgb/episode_000000.mp4" \
+  --pcd-stride 2 \
+  --pcd-max-depth 5000
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -17,6 +28,79 @@ import numpy as np
 
 # ==================== 路径与基础依赖 ====================
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def _pcd_dataset_output_root(depth_path: Path, pcd_root: Path) -> Path:
+    """Return ``pcd/<dataset-name>/<task-name>`` for a depth video path."""
+    parts = depth_path.parts
+    try:
+        # Dataset roots follow ``<dataset>_depth_preview/<task>`` (for
+        # example ``ai2_depth_preview`` or ``leju_depth_preview``).
+        dataset_idx = next(i for i, part in enumerate(parts)
+                           if part.endswith("_depth_preview"))
+        dataset_root = parts[dataset_idx]
+        task_name = parts[dataset_idx + 1]
+    except (StopIteration, IndexError) as exc:
+        raise ValueError(
+            f"无法从深度路径解析数据集/任务名（需要包含 <dataset>_depth_preview/<task>）: {depth_path}"
+        ) from exc
+    return Path(pcd_root) / dataset_root / task_name
+
+
+def _generate_pcd_videos(depth_paths, pcd_root, rgb_path=None, stride=2,
+                         max_depth_mm=5000, depth_scale=1.0):
+    """Convert one or more depth videos to per-frame binary PCD files."""
+    from tools.depth_to_pointcloud import read_depth_video, read_rgb_video, depth_to_pointcloud
+
+    pcd_root = Path(pcd_root)
+    for kind, depth_path in depth_paths.items():
+        depth_path = Path(depth_path)
+        if depth_path.is_dir():
+            videos = sorted(depth_path.glob("*.mp4"))
+            if len(videos) != 1:
+                raise FileNotFoundError(f"深度目录应恰好包含一个 mp4: {depth_path}")
+            depth_path = videos[0]
+        if not depth_path.is_file():
+            raise FileNotFoundError(f"深度视频不存在: {depth_path}")
+        # LeRobot stores the matching RGB stream beside the depth stream.
+        rgb = Path(rgb_path) if rgb_path else Path(str(depth_path).replace("_depth_nested_sparse", "_rgb").replace("_depth_refined", "_rgb").replace("_depth", "_rgb"))
+        if rgb.is_dir():
+            videos = sorted(rgb.glob("*.mp4"))
+            rgb = videos[0] if len(videos) == 1 else rgb
+        if not rgb.is_file():
+            raise FileNotFoundError(f"未找到对应 RGB 视频，请用 --rgb-video 指定: {rgb}")
+        print(f"[{kind}] decoding {depth_path}")
+        depths = read_depth_video(str(depth_path))
+        rgbs = read_rgb_video(str(rgb))
+        frame_names = list(range(min(len(depths), len(rgbs))))
+        if kind == "baseline":
+            # Sparse baseline frames correspond to source-video indices listed
+            # in statistics/**/episode_*/manifest.json.
+            base = depth_path.parents[3] if len(depth_path.parents) > 3 else depth_path.parent
+            camera_dir = depth_path.parent.name.replace("observation.images.", "").replace("_depth_nested_sparse", "")
+            episode_name = depth_path.stem
+            manifest = base / "statistics" / camera_dir / episode_name / "manifest.json"
+            if not manifest.is_file():
+                raise FileNotFoundError(f"baseline manifest 不存在: {manifest}")
+            info = json.loads(manifest.read_text())
+            frame_names = info.get("sample_frame_indices")
+            if not frame_names or len(frame_names) < len(depths):
+                raise ValueError(f"manifest 帧索引不足: {manifest}（深度帧数={len(depths)}）")
+            frame_names = frame_names[:len(depths)]
+            if max(frame_names, default=-1) >= len(rgbs):
+                raise ValueError(f"RGB 视频帧数不足以匹配 manifest: {manifest}")
+            rgbs = [rgbs[j] for j in frame_names]
+            print(f"[{kind}] using source frame indices from {manifest}")
+        n = min(len(depths), len(rgbs), len(frame_names))
+        out_dir = _pcd_dataset_output_root(depth_path, pcd_root) / kind
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(n):
+            pts, cols = depth_to_pointcloud(depths[i], rgbs[i], stride=stride,
+                                            max_depth_mm=max_depth_mm,
+                                            depth_scale=depth_scale)
+            fname = out_dir / f"frame_{int(frame_names[i]):06d}.pcd"
+            _write_pcd(fname, pts, cols.astype(np.float32) / 255.0 if cols is not None else None)
+        print(f"[{kind}] wrote {n} frames to {out_dir}")
 
 
 # ==================== 图像与深度数据转换 ====================
@@ -189,7 +273,8 @@ def _decode_external_depth(path: Path, frame_index: int, fps: float, backend: st
 def main():
     # ---------- 命令行参数 ----------
     parser = argparse.ArgumentParser(description="LeRobot 数据集可视化")
-    parser.add_argument("--repo-id", required=True)
+    parser.add_argument("--repo-id", default=None,
+                        help="LeRobot 数据集 ID（交互可视化模式必填）")
     parser.add_argument("--root", default="data/refine")
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--frame", type=int, default=0)
@@ -198,11 +283,37 @@ def main():
                         help="使用原生 LeRobotDataset（无 PCD）")
     parser.add_argument("--save-pcd", default=None,
                         help="PCD 保存目录（按 's' 键保存当前帧）")
+    parser.add_argument("--generate-pcd", action="store_true",
+                        help="批量将三套外部深度视频转换为逐帧 PCD 后退出")
+    parser.add_argument("--pcd-root", default="pcd",
+                        help="批量 PCD 输出根目录，默认 pcd")
+    parser.add_argument("--original-depth", type=Path)
+    parser.add_argument("--baseline-depth", type=Path)
+    parser.add_argument("--refine-depth", type=Path)
+    parser.add_argument("--rgb-video", type=Path,
+                        help="三套深度共用的 RGB 视频；省略时从深度路径自动推断")
+    parser.add_argument("--pcd-stride", type=int, default=2)
+    parser.add_argument("--pcd-max-depth", type=float, default=5000)
+    parser.add_argument("--pcd-depth-scale", type=float, default=1.0)
     parser.add_argument("--compare-depth-before", type=Path,
                         help="比较模式：refine 前的深度视频")
     parser.add_argument("--compare-depth-after", type=Path,
                         help="比较模式：refine 后的深度视频")
     args = parser.parse_args()
+
+    if args.generate_pcd:
+        paths = {k: p for k, p in (("original", args.original_depth),
+                                   ("baseline", args.baseline_depth),
+                                   ("refine", args.refine_depth)) if p is not None}
+        if len(paths) != 3:
+            parser.error("--generate-pcd 需要同时提供 --original-depth、--baseline-depth、--refine-depth")
+        _generate_pcd_videos(paths, args.pcd_root, args.rgb_video,
+                             args.pcd_stride, args.pcd_max_depth,
+                             args.pcd_depth_scale)
+        return
+
+    if not args.repo_id:
+        parser.error("交互可视化模式需要提供 --repo-id；仅批量生成 PCD 时使用 --generate-pcd")
 
     if bool(args.compare_depth_before) != bool(args.compare_depth_after):
         parser.error("--compare-depth-before 和 --compare-depth-after 必须同时提供")
