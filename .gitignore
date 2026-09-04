@@ -39,5 +39,8 @@ tests/output/
 pcd/ 
 pcds/
 
+# reports
+report/
+
 log.txt
 checkpoints
