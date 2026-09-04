@@ -3,7 +3,7 @@
 为 LeRobot 数据集（文件系统级别）新增深度数据。
 
 用法:
-    python scripts/add_depth_fs.py --dataset-dir data/lerobot/your_dataset \
+    python scripts/add_depth_fs.py --dataset-dir data/refine/your_dataset \
         --strategy da3 --da3-model depth-anything/DA3METRIC-LARGE
 """
 

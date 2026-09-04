@@ -5,7 +5,7 @@ LeRobot 数据集可视化：RGB + Depth + Point Cloud（方向键切换帧）�
 用法:
 python scripts/load_lerobot.py \
     --repo-id AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
-    --root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000
+    --root data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000
 """
 
 import argparse
@@ -190,7 +190,7 @@ def main():
     # ---------- 命令行参数 ----------
     parser = argparse.ArgumentParser(description="LeRobot 数据集可视化")
     parser.add_argument("--repo-id", required=True)
-    parser.add_argument("--root", default="data/lerobot")
+    parser.add_argument("--root", default="data/refine")
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--frame", type=int, default=0)
     parser.add_argument("--camera", default="all")

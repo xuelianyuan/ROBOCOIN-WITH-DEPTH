@@ -4,7 +4,7 @@ depth_augmenter.py — 为已有 LeRobot 数据集增量添加深度和点云数
 用法:
     from src.depth_augmenter import DepthAugmenter
 
-    augmenter = DepthAugmenter("your_org/dataset", root="data/lerobot")
+    augmenter = DepthAugmenter("your_org/dataset", root="data/refine")
     augmenter.run(strategy="da3", model_id="depth-anything/DA3METRIC-LARGE")
 """
 
@@ -33,7 +33,7 @@ class DepthAugmenter:
     """
 
     def __init__(
-        self, repo_id: str, root: str = "data/lerobot",
+        self, repo_id: str, root: str = "data/refine",
         strategy: str = "da3",
         fps: int = 30, crf: int = 6, preset: str = "slow",
         **repair_kwargs,

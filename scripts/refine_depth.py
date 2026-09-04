@@ -10,8 +10,8 @@ Nested 采样帧；使用 ``quantile`` 或 ``linear`` 拟合映射并写出验�
 用法示例::
 
     python scripts/refine_depth.py \
-        --dataset-dir data/lerobot/your_dataset \
-        --result-root data/lerobot/your_dataset/depth_results \
+        --dataset-dir data/refine/your_dataset \
+        --result-root data/refine/your_dataset/depth_results \
         --camera head --mapping quantile --stage validate --plot-trend
 
 输出：报告位于 ``depth_results/refine/reports/``，生成的视频位于

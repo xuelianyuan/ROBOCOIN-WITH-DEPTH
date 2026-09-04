@@ -21,7 +21,7 @@ from src.depth_augmenter import DepthAugmenter
 def main():
     parser = argparse.ArgumentParser(description="为 LeRobot 数据集新增深度")
     parser.add_argument("--repo-id", required=True)
-    parser.add_argument("--root", default="data/lerobot")
+    parser.add_argument("--root", default="data/refine")
     parser.add_argument("--output-repo-id", default=None, help="输出 repo_id")
     parser.add_argument("--output-root", default=None, help="输出 root 目录")
     parser.add_argument("--cameras", nargs="+", default=None)
