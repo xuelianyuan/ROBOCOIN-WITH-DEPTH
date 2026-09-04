@@ -1,0 +1,14 @@
+{
+  "title": "Depth result inspector",
+  "rgb": {
+    "head": "/absolute/path/head_rgb.mp4",
+    "left": "/absolute/path/left_rgb.mp4",
+    "right": "/absolute/path/right_rgb.mp4"
+  },
+  "groups": {
+    "head.metric": {"depth": "/absolute/path/head_metric.mp4", "pcd": "/absolute/path/head/metric/frame_{frame:06d}.pcd"},
+    "head.nested": {"depth": "/absolute/path/head_nested.mp4", "pcd": "/absolute/path/head/nested/frame_{frame:06d}.pcd"},
+    "head.refine": {"depth": "/absolute/path/head_refine.mp4", "pcd": "/absolute/path/head/refine/frame_{frame:06d}.pcd"}
+  },
+  "invalid_depth": {"min_exclusive": 0, "max_exclusive": 4095}
+}

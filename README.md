@@ -197,16 +197,16 @@ ffmpeg -version
 
 #### 1. 选择单个 LeRobot 数据集
 
-`--root` 必须直接指向包含 `meta/info.json`、`data/` 和 `videos/` 的单个数据集目录，不能指向包含多个数据集的集合目录（例如 `data/lerobot/ai2_depth_preview`）。可用下面的命令列出数据集：
+`--root` 必须直接指向包含 `meta/info.json`、`data/` 和 `videos/` 的单个数据集目录，不能指向包含多个数据集的集合目录（例如 `data/refine/ai2_depth_preview`）。可用下面的命令列出数据集：
 
 ```bash
-find data/lerobot -path '*/meta/info.json' -print
+find data/refine -path '*/meta/info.json' -print
 ```
 
 例如：
 
 ```bash
-DATASET=data/lerobot/ai2_depth_preview/AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000
+DATASET=data/refine/ai2_depth_preview/AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000
 test -f "$DATASET/meta/info.json" && echo "metadata ok"
 ```
 
@@ -223,7 +223,7 @@ cp -a "$DATASET" "${DATASET}_v21_backup"
 
 python -m lerobot.datasets.v30.convert_dataset_v21_to_v30 \
   --repo-id AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000 \
-  --root data/lerobot/ai2_depth_preview
+  --root data/refine/ai2_depth_preview
 ```
 
 转换器的 `--root` 是数据集的父目录，而下面可视化脚本的 `--root` 是数据集目录本身。不要只修改 `meta/info.json` 中的版本号。
@@ -260,7 +260,7 @@ python scripts/load_lerobot.py \
 
 假设你已经有一个 LeRobot 数据集，目录结构如下：
 ```bash
-data/lerobot/dataset/
+data/refine/dataset/
 ├── data
 │   └── chunk-000
 │       ├── episode_000000.parquet
@@ -297,7 +297,7 @@ python scripts/add_depth_fs_parallel.py \
 完成后，数据集目录下将添加深度视频，结构如：
 
 ```
-data/lerobot/dataset/
+data/refine/dataset/
 ├── data
 │   └── chunk-000
 │       ├── episode_000000.parquet
@@ -349,7 +349,7 @@ python scripts/load_lerobot.py --repo-id dataset --native
 ### `add_depth_fs.py` — 文件系统级增强（串行）
 
 ```bash
-python scripts/add_depth_fs.py --dataset-dir data/lerobot/dataset --strategy da3
+python scripts/add_depth_fs.py --dataset-dir data/refine/dataset --strategy da3
 ```
 
 | 参数 | 说明 | 默认 |
@@ -366,7 +366,7 @@ python scripts/add_depth_fs.py --dataset-dir data/lerobot/dataset --strategy da3
 ### `add_depth_fs_parallel.py` — 文件系统级增强（并行流水线，推荐）
 
 ```bash
-python scripts/add_depth_fs_parallel.py --dataset-dir data/lerobot/dataset --strategy da3_rife --sample-stride 5
+python scripts/add_depth_fs_parallel.py --dataset-dir data/refine/dataset --strategy da3_rife --sample-stride 5
 ```
 
 与 `add_depth_fs.py` 参数完全一致，但采用 **2 队列流水线架构**：
@@ -400,7 +400,7 @@ python scripts/add_depth_to_lerobot.py --repo-id org/dataset --output-repo-id or
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
-| `--repo-id` / `--root` | 源数据集 | 必填 / data/lerobot |
+| `--repo-id` / `--root` | 源数据集 | 必填 / data/refine |
 | `--output-repo-id` / `--output-root` | 输出目标 | `{id}_with_depth` / 同源 |
 | `--cameras` | head/right/left/chest | 全部 |
 | `--strategy` | da3 / vda | da3 |
@@ -417,7 +417,7 @@ python scripts/create_lerobot_dataset_with_depth.py \
 | 参数 | 说明 | 默认 |
 |------|------|------|
 | `--h5-dir` / `--repo-id` | H5 目录 / 输出 ID | 必填 |
-| `--root` / `--fps` / `--task` | 输出根/帧率/任务 | data/lerobot / 30 / arrange_teaset |
+| `--root` / `--fps` / `--task` | 输出根/帧率/任务 | data/refine / 30 / arrange_teaset |
 | `--sample-frames` | 均匀采样 (0=全部) | 0 |
 | `--repair` / `--repair-strategy` | 启用修复 / da3,vda,lingbot | False / da3 |
 | `--da3-*` / `--vda-*` / `--lingbot-*` | 策略参数 | — |
@@ -427,7 +427,7 @@ python scripts/create_lerobot_dataset_with_depth.py \
 ### `load_lerobot.py` — 可视化
 
 ```bash
-DATASET=data/lerobot/ai2_depth_preview/AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000
+DATASET=data/refine/ai2_depth_preview/AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000
 python scripts/load_lerobot.py \
     --repo-id AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000 \
     --root "$DATASET" --camera all
@@ -435,11 +435,47 @@ python scripts/load_lerobot.py \
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
-| `--repo-id` / `--root` | 数据集 ID / 包含 `meta/info.json` 的数据集目录 | 必填 / data/lerobot |
+| `--repo-id` / `--root` | 数据集 ID / 包含 `meta/info.json` 的数据集目录 | 必填 / data/refine |
 | `--episode` / `--frame` | episode 索引 / 帧索引 | 0 / 0 |
 | `--camera` | head / right / all | all |
 | `--native` | 只使用原生 LeRobot，不生成点云 | False |
 | `--save-pcd` | 按 `p` 保存当前帧点云的输出目录 | 不保存 |
+
+#### 为 Depth Inspector 生成三视角 PCD
+
+以下命令分别为 head、left wrist 和 right wrist 生成 Metric、Nested、Refine 三套逐帧点云。输出会按相机隔离，避免不同视角读取同一份 PCD。
+
+```bash
+# Head
+python scripts/load_lerobot.py --generate-pcd --pcd-root pcd \
+  --original-depth data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_head_depth \
+  --baseline-depth data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/videos/chunk-000/observation.images.cam_front_head_depth_nested_sparse \
+  --refine-depth data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined \
+  --rgb-video data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_head_rgb/episode_000000.mp4
+
+# Left wrist
+python scripts/load_lerobot.py --generate-pcd --pcd-root pcd \
+  --original-depth data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_left_wrist_depth \
+  --baseline-depth data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/videos/chunk-000/observation.images.cam_left_wrist_depth_nested_sparse \
+  --refine-depth data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/refine/videos/chunk-000/observation.images.cam_left_wrist_depth_refined \
+  --rgb-video data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_left_wrist_rgb/episode_000000.mp4
+
+# Right wrist
+python scripts/load_lerobot.py --generate-pcd --pcd-root pcd \
+  --original-depth data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_right_wrist_depth \
+  --baseline-depth data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/videos/chunk-000/observation.images.cam_right_wrist_depth_nested_sparse \
+  --refine-depth data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/refine/videos/chunk-000/observation.images.cam_right_wrist_depth_refined \
+  --rgb-video data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_right_wrist_rgb/episode_000000.mp4
+```
+
+输出结构为 `pcd/<dataset>/<task>/<original|baseline|refine>/<camera>/frame_*.pcd`。生成完成后启动检查器：
+
+```bash
+python tools/depth_inspector/server.py \
+  --dataset data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000
+```
+
+浏览器访问 `http://127.0.0.1:8765/outputs/depth_inspector.html`。修改生成或发现逻辑后必须重启服务。
 
 ## 深度处理 Pipeline
 
@@ -453,45 +489,36 @@ python scripts/load_lerobot.py \
 
 ```bash
 python scripts/analyze_depth.py \
-    --dataset-dir data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
+    --dataset-dir data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
     --camera head \
     --sample-count 20 \
     --strategy da3_nested \
     --save-video \
-    --result-root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results
+    --result-root data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results
 ```
 
 结果目录：`baseline/statistics`、`baseline/videos`、`refine/reports`、`refine/videos`。
 
 ### 2. 批量处理多个项目 (`batch_depth_results.py`)
 
-如需一次扫描 `data/lerobot` 下的全部项目，可使用批处理器（默认 head、left_wrist、right_wrist、chest）：
+如需一次扫描 `data/refine` 下的全部项目，可使用批处理器（默认 head、left_wrist、right_wrist）：
 
 ```bash
-python scripts/batch_depth_results.py --root data/lerobot \
-  --cameras head left_wrist right_wrist chest --stage baseline --save-video
+python scripts/batch_depth_results.py --root data/refine \
+  --cameras head left_wrist right_wrist --stage baseline --save-video
 ```
 
 使用 `--stage all` 可批量执行 baseline 和 refine，`--dry-run` 可预览项目。
 
-支持的视角为 `head`、`left_wrist`、`right_wrist` 和 `chest`。例如只处理 chest 视角：
-
-```bash
-python scripts/batch_depth_results.py \
-  --root data/lerobot \
-  --cameras chest \
-  --stage all \
-  --save-video \
-  --refine-stage full
-```
+支持的视角为 `head`、`left_wrist` 和 `right_wrist`；chest 不参与该批处理流程。
 ### 3. Validate：验证迁移是否有效 (`refine_depth.py`)
 
 先使用采样帧拟合 Metric 到 Nested 的映射，只生成报告，不生成视频：
 
 ```bash
 python scripts/refine_depth.py \
-  --dataset-dir data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
-  --result-root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
+  --dataset-dir data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
+  --result-root data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
   --camera head --input-depth-suffix _depth \
   --mapping quantile --stage validate --plot-trend
 ```
@@ -504,8 +531,8 @@ python scripts/refine_depth.py \
 
 ```bash
 python scripts/refine_depth.py \
-  --dataset-dir data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
-  --result-root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
+  --dataset-dir data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
+  --result-root data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
   --camera head --input-depth-suffix _depth \
   --mapping quantile --stage full
 ```
@@ -514,8 +541,8 @@ python scripts/refine_depth.py \
 
 ```bash
 python scripts/refine_depth.py \
-  --dataset-dir data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
-  --result-root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
+  --dataset-dir data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
+  --result-root data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
   --camera head --input-depth-suffix _depth \
   --mapping quantile --stage rife
 ```
@@ -534,9 +561,9 @@ python scripts/refine_depth.py \
 
 ```bash
 python scripts/plot_depth_comparison.py \
-  --before data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_head_depth/episode_000000.mp4 \
-  --after data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined/episode_000000.mp4 \
-  --nested data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/statistics/cam_front_head/episode_000000/frame_000000000.npy \
+  --before data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_head_depth/episode_000000.mp4 \
+  --after data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined/episode_000000.mp4 \
+  --nested data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/statistics/cam_front_head/episode_000000/frame_000000000.npy \
   --frame 0
 ```
 
