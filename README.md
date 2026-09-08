@@ -481,14 +481,14 @@ python tools/depth_inspector/server.py \
 
 单项目的结果默认写入 `<dataset-dir>/depth_results`，处理流程如下：
 
-`analyze_depth.py` 生成稀疏 baseline → `refine_depth.py` 验证并生成 refined 视频 → `plot_depth_comparison.py` 对比结果。
+`build_baseline.py` 生成稀疏 baseline → `run_refine.py` 验证并生成 refined 视频 → `plot_comparison.py` 对比结果。
 
-### 1. Baseline：DA3-Nested 稀疏分析 (`analyze_depth.py`)
+### 1. 构建 Baseline (`build_baseline.py`)
 
 对 RGB 视频均匀采样并运行 DA3-Nested，保存采样深度帧、统计 JSON 和可选稀疏视频。
 
 ```bash
-python scripts/analyze_depth.py \
+python scripts/depth_refine/build_baseline.py \
     --dataset-dir data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
     --camera head \
     --sample-count 20 \
@@ -499,24 +499,24 @@ python scripts/analyze_depth.py \
 
 结果目录：`baseline/statistics`、`baseline/videos`、`refine/reports`、`refine/videos`。
 
-### 2. 批量处理多个项目 (`batch_depth_results.py`)
+### 2. 批量执行 Pipeline (`run_batch.py`)
 
 如需一次扫描 `data/refine` 下的全部项目，可使用批处理器（默认 head、left_wrist、right_wrist）：
 
 ```bash
-python scripts/batch_depth_results.py --root data/refine \
+python scripts/depth_refine/run_batch.py --root data/refine \
   --cameras head left_wrist right_wrist --stage baseline --save-video
 ```
 
 使用 `--stage all` 可批量执行 baseline 和 refine，`--dry-run` 可预览项目。
 
 支持的视角为 `head`、`left_wrist` 和 `right_wrist`；chest 不参与该批处理流程。
-### 3. Validate：验证迁移是否有效 (`refine_depth.py`)
+### 3. Validate：验证迁移有效性 (`run_refine.py`)
 
 先使用采样帧拟合 Metric 到 Nested 的映射，只生成报告，不生成视频：
 
 ```bash
-python scripts/refine_depth.py \
+python scripts/depth_refine/run_refine.py \
   --dataset-dir data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
   --result-root data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
   --camera head --input-depth-suffix _depth \
@@ -525,12 +525,12 @@ python scripts/refine_depth.py \
 
 报告写入 `depth_results/refine/reports/<camera>/<episode>/`；确认 `improved` 后再生成视频。
 
-### 4. 生成 Refined 视频 (`refine_depth.py`)
+### 4. 生成 Refined 视频 (`run_refine.py`)
 
 直接将映射应用到原深度视频的每一帧：
 
 ```bash
-python scripts/refine_depth.py \
+python scripts/depth_refine/run_refine.py \
   --dataset-dir data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
   --result-root data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
   --camera head --input-depth-suffix _depth \
@@ -540,7 +540,7 @@ python scripts/refine_depth.py \
 使用 RIFE 将迁移后的稀疏关键帧补齐到完整时间轴：
 
 ```bash
-python scripts/refine_depth.py \
+python scripts/depth_refine/run_refine.py \
   --dataset-dir data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
   --result-root data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results \
   --camera head --input-depth-suffix _depth \
@@ -549,7 +549,7 @@ python scripts/refine_depth.py \
 
 `full` 是逐帧映射的 Metric 视频；`rife` 是迁移关键帧经 RIFE 补齐的视频。
 
-### 5. 三路点云、深度图与直方图对比 (`plot_depth_comparison.py`)
+### 5. 可视化对比 (`plot_comparison.py`)
 
 生成 refined 视频后，可绘制 Original、DA3 LARGE 和 DA3 NESTED 三路结果。输出为 3×3 对比图：
 
@@ -560,7 +560,7 @@ python scripts/refine_depth.py \
 三个点云使用相同的相机内参、观察角度和坐标范围，因此点云大小和距离差异可以直接横向比较。
 
 ```bash
-python scripts/plot_depth_comparison.py \
+python scripts/depth_refine/plot_comparison.py \
   --before data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_head_depth/episode_000000.mp4 \
   --after data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined/episode_000000.mp4 \
   --nested data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/statistics/cam_front_head/episode_000000/frame_000000000.npy \
@@ -582,7 +582,7 @@ python scripts/plot_depth_comparison.py \
 如有真实相机标定参数，应通过命令行覆盖默认内参：
 
 ```bash
-python scripts/plot_depth_comparison.py \
+python scripts/depth_refine/plot_comparison.py \
   --before <original_depth.mp4> \
   --after <da3_large_depth.mp4> \
   --nested <da3_nested_frame.npy> \
@@ -594,7 +594,7 @@ python scripts/plot_depth_comparison.py \
 如需根据一个 episode 的全部 Nested 采样帧批量生成对比图，使用 `--nested-dir` 指定 baseline 统计目录，并添加 `--all-sampled`：
 
 ```bash
-python scripts/plot_depth_comparison.py \
+python scripts/depth_refine/plot_comparison.py \
   --before <项目>/videos/chunk-000/observation.images.cam_front_head_depth/episode_000000.mp4 \
   --after <项目>/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined/episode_000000.mp4 \
   --nested-dir <项目>/depth_results/baseline/statistics/cam_front_head/episode_000000 \

@@ -2,18 +2,18 @@
 """批量遍历 LeRobot 数据集项目并执行深度 baseline/refine 流程。
 
 脚本会在指定根目录下查找包含 ``videos/chunk-*`` 的项目，按用户选择的
-相机视角调用 ``analyze_depth.py`` 和 ``refine_depth.py``。每个项目的结果
+相机视角调用 ``build_baseline.py`` 和 ``run_refine.py``。每个项目的结果
 独立写入该项目下的 ``depth_results/baseline`` 和 ``depth_results/refine``，
 因此不会与原始 LeRobot 的 ``videos``、``meta`` 目录混在一起。
 
 用法示例::
 
-    python scripts/batch_depth_results.py \
+    python scripts/depth_refine/run_batch.py \
         --root data/refine \
         --cameras head left_wrist right_wrist chest \
         --stage all --save-video --refine-stage validate
 
-``baseline`` 先运行 ``analyze_depth.py``；``refine`` 需要已有 baseline
+``baseline`` 先运行 ``build_baseline.py``；``refine`` 需要已有 baseline
 统计；``all`` 按顺序执行两阶段。使用 ``--dry-run`` 可只检查将处理的项目。
 """
 from __future__ import annotations
@@ -169,7 +169,7 @@ def main() -> None:
                     plot_mean_curve(project, CAMERA_KEYS[camera], result_root)
                 continue
             # ===== Baseline 阶段：运行深度分析并输出统计结果 =====
-            cmd = [sys.executable, "scripts/analyze_depth.py", "--dataset-dir", str(project),
+            cmd = [sys.executable, "scripts/depth_refine/build_baseline.py", "--dataset-dir", str(project),
                    "--camera", CAMERA_KEYS[camera], "--sample-count", str(args.sample_count),
                    "--result-root", str(result_root)]
             if args.save_video:
@@ -181,7 +181,7 @@ def main() -> None:
             if args.stage in ("refine", "all"):
                 # ===== Refine 阶段：依赖 baseline 统计结果生成完整深度视频 =====
                 # all 模式会在 baseline 成功后执行；单独执行时必须已有统计结果。
-                refine = [sys.executable, "scripts/refine_depth.py", "--dataset-dir", str(project),
+                refine = [sys.executable, "scripts/depth_refine/run_refine.py", "--dataset-dir", str(project),
                           "--camera", CAMERA_KEYS[camera], "--result-root", str(result_root),
                           "--stage", args.refine_stage]
                 print("[refine]", project.name, camera)

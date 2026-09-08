@@ -2,14 +2,14 @@
 """用 Nested 稀疏参考迁移深度分布，验证后可选 RIFE 补齐时间轴。
 
 处理流程：先读取项目 ``videos/`` 下的原始 Metric 深度视频，再读取
-``depth_results/baseline/statistics/`` 中由 ``analyze_depth.py`` 生成的
+``depth_results/baseline/statistics/`` 中由 ``build_baseline.py`` 生成的
 Nested 采样帧；使用 ``quantile`` 或 ``linear`` 拟合映射并写出验证报告。
 ``validate`` 只评估，``full`` 将映射应用到每一帧，``rife`` 则用 RIFE
 把迁移后的稀疏关键帧补齐为完整视频。
 
 用法示例::
 
-    python scripts/refine_depth.py \
+    python scripts/depth_refine/run_refine.py \
         --dataset-dir data/refine/your_dataset \
         --result-root data/refine/your_dataset/depth_results \
         --camera head --mapping quantile --stage validate --plot-trend

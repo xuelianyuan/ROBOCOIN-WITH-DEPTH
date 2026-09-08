@@ -8,7 +8,7 @@
 
 用法示例::
 
-    python scripts/plot_depth_comparison.py \
+    python scripts/depth_refine/plot_comparison.py \
         --before data/refine/your_dataset/videos/chunk-000/observation.images.cam_front_head_depth/episode_000000.mp4 \
         --after data/refine/your_dataset/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined/episode_000000.mp4 \
         --nested data/refine/your_dataset/depth_results/baseline/statistics/cam_front_head/episode_000000/frame_000000000.npy \
@@ -18,7 +18,7 @@
 
 批量绘制 baseline episode 的全部采样帧::
 
-    python scripts/plot_depth_comparison.py \
+    python scripts/depth_refine/plot_comparison.py \
         --before <项目>/videos/chunk-000/observation.images.cam_front_head_depth/episode_000000.mp4 \
         --after <项目>/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined/episode_000000.mp4 \
         --nested-dir <项目>/depth_results/baseline/statistics/cam_front_head/episode_000000 \

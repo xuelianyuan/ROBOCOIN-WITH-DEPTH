@@ -9,11 +9,11 @@
 * 可选的稀疏深度视频（12-bit H.265）。
 
 该脚本只生成稀疏 baseline，不会伪造完整时间轴。结果默认写入
-``<dataset-dir>/depth_results``，可交给 ``refine_depth.py`` 继续验证或修复。
+``<dataset-dir>/depth_results``，可交给 ``run_refine.py`` 继续验证或修复。
 
 用法示例::
 
-    python scripts/analyze_depth.py --dataset-dir data/refine/my_dataset \\
+    python scripts/depth_refine/build_baseline.py --dataset-dir data/refine/my_dataset \\
         --camera head --sample-count 20 --save-video
 """
 
