@@ -9,7 +9,7 @@
 用法示例::
 
     python scripts/depth_refine/run_batch.py \
-        --root data/refine \
+        --root data/lerobot \
         --cameras head left_wrist right_wrist chest \
         --stage all --save-video --refine-stage validate
 
@@ -130,8 +130,8 @@ def plot_mean_curve(project: Path, camera: str, result_root: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="批量处理根目录下所有 LeRobot 项目和指定相机视角")
-    parser.add_argument("--root", default="data/refine",
-                        help="数据集根目录，默认：data/refine")
+    parser.add_argument("--root", default="data/lerobot",
+                        help="数据集根目录，默认：data/lerobot")
     parser.add_argument("--cameras", nargs="+", default=list(CAMERA_KEYS),
                         choices=sorted(CAMERA_KEYS),
                         help="要处理的视角：head、left_wrist、right_wrist、chest")

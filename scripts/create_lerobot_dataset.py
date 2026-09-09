@@ -57,7 +57,7 @@ def main():
     parser = argparse.ArgumentParser(description="RoboCOIN HDF5 → LeRobot (不含深度)")
     parser.add_argument("--h5-dir", type=str)
     parser.add_argument("--repo-id", type=str)
-    parser.add_argument("--root", type=str, default="data/refine")
+    parser.add_argument("--root", type=str, default="data/lerobot")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--task", type=str, default="arrange_teaset")
     parser.add_argument("--image-writer-threads", type=int, default=16)

@@ -9,9 +9,9 @@
 用法示例::
 
     python scripts/depth_refine/plot_comparison.py \
-        --before data/refine/your_dataset/videos/chunk-000/observation.images.cam_front_head_depth/episode_000000.mp4 \
-        --after data/refine/your_dataset/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined/episode_000000.mp4 \
-        --nested data/refine/your_dataset/depth_results/baseline/statistics/cam_front_head/episode_000000/frame_000000000.npy \
+        --before data/lerobot/your_dataset/videos/chunk-000/observation.images.cam_front_head_depth/episode_000000.mp4 \
+        --after data/lerobot/your_dataset/depth_results/refine/videos/chunk-000/observation.images.cam_front_head_depth_refined/episode_000000.mp4 \
+        --nested data/lerobot/your_dataset/depth_results/baseline/statistics/cam_front_head/episode_000000/frame_000000000.npy \
         --frame 0
 
 默认输出到 ``depth_results/refine/plots/``，也可用 ``--output`` 指定路径。

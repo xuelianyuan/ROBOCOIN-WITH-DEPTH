@@ -13,7 +13,7 @@
 
 用法示例::
 
-    python scripts/depth_refine/build_baseline.py --dataset-dir data/refine/my_dataset \\
+    python scripts/depth_refine/build_baseline.py --dataset-dir data/lerobot/my_dataset \\
         --camera head --sample-count 20 --save-video
 """
 

@@ -5,15 +5,15 @@ LeRobot 数据集可视化：RGB + Depth + Point Cloud（方向键切换帧）�
 用法:
 python scripts/load_lerobot.py \
     --repo-id AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
-    --root data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000
+    --root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000
 
 python scripts/load_lerobot.py \
   --generate-pcd \
   --pcd-root pcd \
   --original-depth "/home/user/RoboCOIN-with-Depth/data/original/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_depth" \
-  --baseline-depth "/home/user/RoboCOIN-with-Depth/data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/videos/chunk-000/observation.images.cam_front_chest_depth_nested_sparse" \
-  --refine-depth "/home/user/RoboCOIN-with-Depth/data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_depth" \
-  --rgb-video "/home/user/RoboCOIN-with-Depth/data/refine/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_rgb/episode_000000.mp4" \
+  --baseline-depth "/home/user/RoboCOIN-with-Depth/data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/videos/chunk-000/observation.images.cam_front_chest_depth_nested_sparse" \
+  --refine-depth "/home/user/RoboCOIN-with-Depth/data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_depth" \
+  --rgb-video "/home/user/RoboCOIN-with-Depth/data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_rgb/episode_000000.mp4" \
   --pcd-stride 2 \
   --pcd-max-depth 5000
 """
@@ -281,7 +281,7 @@ def main():
     parser = argparse.ArgumentParser(description="LeRobot 数据集可视化")
     parser.add_argument("--repo-id", default=None,
                         help="LeRobot 数据集 ID（交互可视化模式必填）")
-    parser.add_argument("--root", default="data/refine")
+    parser.add_argument("--root", default="data/lerobot")
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--frame", type=int, default=0)
     parser.add_argument("--camera", default="all")

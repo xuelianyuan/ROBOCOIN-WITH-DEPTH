@@ -6,7 +6,7 @@ GPU 深度推理保持串行，但每个 episode 的 ffmpeg 视频编码在后�
 异步执行，不阻塞下一个 episode 的推理。
 
 用法:
-    python scripts/add_depth_fs_parallel.py --dataset-dir data/refine/your_dataset \
+    python scripts/add_depth_fs_parallel.py --dataset-dir data/lerobot/your_dataset \
         --strategy da3
 """
 
