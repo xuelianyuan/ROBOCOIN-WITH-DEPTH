@@ -37,9 +37,8 @@ tests/output/
 
 # Point-cloud data
 pcds/
-pcds/
 
-# reports
+# weekly reports
 report/
 
 log.txt
