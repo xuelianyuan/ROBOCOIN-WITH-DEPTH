@@ -124,7 +124,7 @@ workspace/benchmark_dataset/
 │   └── ...
 ├── hiroom/
 │   ├── data/
-│   ├── fused_pcd/
+│   ├── fused_pcds/
 │   └── selected_scene_list_val.txt
 ├── dtu/
 │   ├── Rectified/

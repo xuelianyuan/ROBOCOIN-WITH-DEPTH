@@ -36,7 +36,7 @@ tests/output/
 .ipynb_checkpoints/
 
 # Point-cloud data
-pcd/ 
+pcds/
 pcds/
 
 # reports

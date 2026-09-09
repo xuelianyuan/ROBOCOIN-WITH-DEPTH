@@ -50,7 +50,7 @@ def discover_pcds(root: Path, view: str, method: str) -> list[str]:
             "left": ("left_wrist", "cam_left"),
             "right": ("right_wrist", "cam_right")}[view]
     candidates = list(root.rglob("*.pcd"))
-    # Generated PCDs may live outside the dataset under pcd/<dataset>/<task>/<method>.
+    # Generated PCDs may live outside the dataset under pcds/<dataset>/<task>/<method>.
     try:
         dataset_dir = next(part for part in root.parts if part.endswith("_depth_preview"))
         task = root.name

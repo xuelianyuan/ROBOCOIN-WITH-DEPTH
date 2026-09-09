@@ -468,7 +468,7 @@ python scripts/load_lerobot.py --generate-pcd --pcd-root pcd \
   --rgb-video data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_right_wrist_rgb/episode_000000.mp4
 ```
 
-输出结构为 `pcd/<dataset>/<task>/<original|baseline|refine>/<camera>/frame_*.pcd`。生成完成后启动检查器：
+输出结构为 `pcds/<dataset>/<task>/<original|baseline|refine>/<camera>/frame_*.pcd`。生成完成后启动检查器：
 
 ```bash
 python tools/depth_inspector/server.py \

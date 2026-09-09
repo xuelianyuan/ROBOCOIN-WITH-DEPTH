@@ -919,7 +919,7 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()
     gc.collect()
 
-    all_ply_path = os.path.join(save_dir, "pcd/combined_pcd.ply")
+    all_ply_path = os.path.join(save_dir, "pcds/combined_pcd.ply")
     input_dir = os.path.join(save_dir, "pcd")
     print("Saving all the point clouds")
     merge_ply_files(input_dir, all_ply_path)

@@ -81,7 +81,7 @@ class HiRoomDataset(Dataset):
         │   ├── cam_K.npy        # Camera intrinsics
         │   └── aliasing_mask/   # Aliasing masks
         
-        fused_pcd/
+        fused_pcds/
         └── {scene_name}.ply     # Ground truth fused point cloud
     """
 
@@ -437,4 +437,3 @@ class HiRoomDataset(Dataset):
             depth[invalid_mask] = 0.0
 
         return depth
-

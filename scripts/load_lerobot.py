@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _pcd_dataset_output_root(depth_path: Path, pcd_root: Path) -> Path:
-    """Return ``pcd/<dataset-name>/<task-name>`` for a depth video path."""
+    """Return ``pcds/<dataset-name>/<task-name>`` for a depth video path."""
     parts = depth_path.parts
     try:
         # Dataset roots follow ``<dataset>_depth_preview/<task>`` (for

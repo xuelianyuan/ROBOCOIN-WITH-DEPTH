@@ -88,7 +88,7 @@ After running the code, you will get the following outputs:
 
 - `${OUTPUT_DIR}/camera_poses.txt`: The camera poses file. Each line contains the extrinsic matrix parameters of a frame.
 - `${OUTPUT_DIR}/intrinsic.txt`: The intrinsic parameters of the camera. Each line contains fx, fy, cx, cy of a frame.
-- `${OUTPUT_DIR}/pcd/combined_pcd.ply`: The combined point cloud file. It contains the 3D points from all frames.
+- `${OUTPUT_DIR}/pcds/combined_pcd.ply`: The combined point cloud file. It contains the 3D points from all frames.
 
 #### Additional Outputs
 
