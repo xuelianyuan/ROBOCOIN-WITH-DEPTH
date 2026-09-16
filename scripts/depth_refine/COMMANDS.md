@@ -3,7 +3,7 @@
 先执行公共配置，再按需复制对应命令。完整参数和限制见 [README.md](README.md)。
 
 ## 公共配置
-Bash/Shell 脚本里的环境变量和路径变量定义。
+以下配置使用 **Bash**，请在同一个终端执行配置、切换和后续命令。
 
 在仓库根目录运行，将数据集、相机、chunk 和 episode 改为实际值：
 
@@ -11,16 +11,41 @@ Bash/Shell 脚本里的环境变量和路径变量定义。
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 DATASET="data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000"
 RESULT_ROOT="$DATASET/depth_results"
-CAMERA="cam_front_head"
 CHUNK="chunk-000"
 EPISODE="episode_000000"
 
-RGB="$DATASET/videos/$CHUNK/observation.images.${CAMERA}_rgb/$EPISODE.mp4"
-BEFORE="$DATASET/videos/$CHUNK/observation.images.${CAMERA}_depth/$EPISODE.mp4"
-AFTER="$RESULT_ROOT/refine/videos/$CHUNK/observation.images.${CAMERA}_depth_refined/$EPISODE.mp4"
-SPARSE="$RESULT_ROOT/baseline/videos/$CHUNK/observation.images.${CAMERA}_depth_nested_sparse/$EPISODE.mp4"
-NESTED_DIR="$RESULT_ROOT/baseline/statistics/$CAMERA/$EPISODE"
+# 切换视角时，同时刷新所有依赖相机的路径
+use_camera() {
+  case "${1:-}" in
+    head|cam_front_head) CAMERA="cam_front_head"; CAMERA_KEY="head" ;;
+    left_wrist|cam_left_wrist) CAMERA="cam_left_wrist"; CAMERA_KEY="left_wrist" ;;
+    right_wrist|cam_right_wrist) CAMERA="cam_right_wrist"; CAMERA_KEY="right_wrist" ;;
+    *) printf '用法：use_camera head|left_wrist|right_wrist\n' >&2; return 1 ;;
+  esac
+  RGB="$DATASET/videos/$CHUNK/observation.images.${CAMERA}_rgb/$EPISODE.mp4"
+  BEFORE="$DATASET/videos/$CHUNK/observation.images.${CAMERA}_depth/$EPISODE.mp4"
+  AFTER="$RESULT_ROOT/refine/videos/$CHUNK/observation.images.${CAMERA}_depth_refined/$EPISODE.mp4"
+  SPARSE="$RESULT_ROOT/baseline/videos/$CHUNK/observation.images.${CAMERA}_depth_nested_sparse/$EPISODE.mp4"
+  NESTED_DIR="$RESULT_ROOT/baseline/statistics/$CAMERA/$EPISODE"
+  printf '当前视角：%s\nRGB：%s\n原始深度：%s\n修正深度：%s\n' "$CAMERA" "$RGB" "$BEFORE" "$AFTER"
+}
+
+use_camera left_wrist  # 默认头部视角
 ```
+
+### 快速切换三个相机视角
+
+配置完成后，每次只需执行下面**一行**，再运行后文需要的命令：
+
+```bash
+use_camera head         # 头部：cam_front_head
+use_camera left_wrist   # 左腕：cam_left_wrist
+use_camera right_wrist  # 右腕：cam_right_wrist
+```
+
+三行是备选项，全部执行会停在右腕视角。不要只修改 `CAMERA`：Bash 已赋值的路径不会随它自动更新。修改 `DATASET`（同时修改 `RESULT_ROOT`）、`CHUNK` 或 `EPISODE` 后，也需重新执行 `use_camera`。如果实际目录中的相机名称不同，请修改函数中的完整相机名。
+
+切换后，生成参考、refine、绘图、浏览及 PCD 导出均使用当前视角；已打开的浏览窗口需退出后重新运行命令。`CHUNK` / `EPISODE` 只指定绘图和检查的输入，baseline/refine 仍处理当前数据集内该相机的所有 episode。
 
 ## 1. build_baseline.py：生成参考
 
@@ -56,26 +81,35 @@ full/rife 默认仅在 MAE、RMSE、Wasserstein 全部改善时生成视频。RI
 
 ## 3. run_batch.py：批量处理
 
+默认批量处理头部、左腕、右腕三个视角。先选择范围，再运行下面的命令：
+
+```bash
+BATCH_CAMERAS=(head left_wrist right_wrist)  # 三个视角
+# BATCH_CAMERAS=("$CAMERA_KEY")             # 或仅处理 use_camera 当前选中的视角
+```
+
+`BATCH_CAMERAS` 独立于单视角切换；仅处理当前视角时，每次切换后需重新执行 `BATCH_CAMERAS=("$CAMERA_KEY")`。
+
 ```bash
 # 先预览项目及相机
 python scripts/depth_refine/run_batch.py \
-  --root data/lerobot --cameras head left_wrist right_wrist chest \
+  --root data/lerobot --cameras "${BATCH_CAMERAS[@]}" \
   --stage all --dry-run
 
 # 批量生成参考并验证
 python scripts/depth_refine/run_batch.py \
-  --root data/lerobot --cameras head left_wrist right_wrist chest \
+  --root data/lerobot --cameras "${BATCH_CAMERAS[@]}" \
   --stage all --sample-count 20 --save-video \
   --refine-stage validate --plot-mean-curve
 
 # 基于已有参考生成完整结果
 python scripts/depth_refine/run_batch.py \
-  --root data/lerobot --cameras head left_wrist right_wrist chest \
+  --root data/lerobot --cameras "${BATCH_CAMERAS[@]}" \
   --stage refine --refine-stage full
 
 # 仅根据已有报告绘图
 python scripts/depth_refine/run_batch.py \
-  --root data/lerobot --cameras head left_wrist right_wrist chest --stage plot
+  --root data/lerobot --cameras "${BATCH_CAMERAS[@]}" --stage plot
 ```
 
 仅处理当前项目时，将 `--root data/lerobot` 换成 `--root "$DATASET"`。
