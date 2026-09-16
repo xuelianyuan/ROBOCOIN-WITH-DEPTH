@@ -8,6 +8,7 @@ import json
 import re
 import subprocess
 import threading
+import tempfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -55,7 +56,7 @@ def discover_pcds(root: Path, view: str, method: str) -> list[str]:
         dataset_dir = next(part for part in root.parts if part.endswith("_depth_preview"))
         task = root.name
         pcd_method = {"metric": "original", "nested": "baseline", "refine": "refine"}[method]
-        pcd_base = PROJECT_ROOT / "pcd" / dataset_dir / task / pcd_method
+        pcd_base = PROJECT_ROOT / "pcds" / dataset_dir / task / pcd_method
         camera_dir = {"head": "cam_front_head", "left": "cam_left_wrist", "right": "cam_right_wrist"}[view]
         scoped = sorted((pcd_base / camera_dir).glob("*.pcd"))
         if scoped:
@@ -67,10 +68,6 @@ def discover_pcds(root: Path, view: str, method: str) -> list[str]:
     candidates += list((PROJECT_ROOT / "pcds").glob("*.pcd"))
     view_files = [path for path in sorted(candidates) if any(key in path.stem.lower() for key in keys)]
     explicit = [path for path in view_files if method in path.stem.lower() or method in str(path.parent).lower()]
-    # The dataset-scoped layout has no camera token; use its method directory.
-    if not explicit:
-        explicit = [path for path in candidates
-                    if path.parent.name.lower() == {"metric": "original", "nested": "baseline", "refine": "refine"}[method]]
     # 无方法标识的历史 PCD 来自原始 metric 深度，只允许放在 Metric 行。
     if method == "metric" and not explicit:
         explicit = [path for path in view_files if not any(name in path.stem.lower() for name in ("nested", "refine"))]
@@ -102,12 +99,20 @@ class Inspector:
         self.cfg = cfg
         self.meta: dict = {"title": cfg.get("title", "Depth inspector"), "groups": {}, "rgb": {}, "ready": False}
         self.frames: dict[str, dict] = {}
+        self.preview_dir = tempfile.TemporaryDirectory(prefix="depth-inspector-")
+        self.previews: dict[str, Path] = {}
         self.lock = threading.Lock()
         for view, value in cfg.get("rgb", {}).items():
             p = Path(value)
             if p.exists():
                 self.meta["rgb"][view] = {**probe(p), "url": f"/media/rgb/{view}"}
-        threading.Thread(target=self._analyze, daemon=True).start()
+        threading.Thread(target=self._prepare, daemon=True).start()
+
+    def _prepare(self):
+        try:
+            self._analyze()
+        except Exception as exc:
+            self.meta["error"] = str(exc)
 
     def _analyze(self):
         """统计所有有效帧，并为同一视角的三种方法生成统一归一化范围。"""
@@ -156,7 +161,54 @@ class Inspector:
             for item in items:
                 item["normalize_min"] = normalize_min
                 item["normalize_max"] = normalize_max
+        for key, info in self.meta["groups"].items():
+            if info.get("available"):
+                self.meta["status"] = f"正在生成流畅播放预览：{key}"
+                self._preview(key)
         self.meta["ready"] = True
+
+    def _normalize(self, depth: np.ndarray, info: dict) -> np.ndarray:
+        invalid = self.cfg.get("invalid_depth", {})
+        valid = (depth > invalid.get("min_exclusive", 0)) & (depth < invalid.get("max_exclusive", 4095))
+        normalized = np.zeros(depth.shape, np.uint8)
+        lo, hi = info["normalize_min"], info["normalize_max"]
+        normalized[valid] = np.clip((depth[valid].astype(float) - lo) * 255 / (hi - lo), 0, 255).astype(np.uint8)
+        return normalized
+
+    def _preview(self, key: str):
+        """一次顺序解码并生成浏览器预览，播放期间无需逐帧启动 FFmpeg。"""
+        info = self.meta["groups"][key]
+        path = Path(self.preview_dir.name) / f"{key}.mp4"
+        size = info["width"] * info["height"] * 2
+        with subprocess.Popen([
+            "ffmpeg", "-v", "error", "-threads", "1", "-i", self.cfg["groups"][key]["depth"],
+            "-f", "rawvideo", "-pix_fmt", "gray12le", "-",
+        ], stdout=subprocess.PIPE) as decoder:
+            try:
+                with subprocess.Popen([
+                    "ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "gray",
+                    "-s", f"{info['width']}x{info['height']}", "-r", str(info["fps"]), "-i", "-",
+                    "-an", "-c:v", "libx264", "-threads", "1", "-preset", "ultrafast", "-crf", "18",
+                    "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(path),
+                ], stdin=subprocess.PIPE) as encoder:
+                    try:
+                        while raw := decoder.stdout.read(size):
+                            if len(raw) != size:
+                                raise ValueError(f"Incomplete depth frame: {key}")
+                            depth = np.frombuffer(raw, np.uint16).reshape(info["height"], info["width"])
+                            encoder.stdin.write(self._normalize(depth, info).tobytes())
+                    finally:
+                        encoder.stdin.close()
+                    if encoder.wait():
+                        raise RuntimeError(f"Preview encoding failed: {key}")
+                if decoder.wait():
+                    raise RuntimeError(f"Preview decoding failed: {key}")
+            finally:
+                decoder.stdout.close()
+                if decoder.poll() is None:
+                    decoder.terminate()
+        self.previews[key] = path
+        info["url"] = f"/media/depth/{key}"
 
     # ============================== 帧数据接口 ==============================
 
@@ -230,6 +282,8 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/pcd": return self.send_data(json.dumps(INSPECTOR.pcd(q["id"][0], int(q["frame"][0]))).encode(), "application/json")
             if parsed.path.startswith("/media/rgb/"):
                 view = parsed.path.rsplit("/", 1)[-1]; self.path = INSPECTOR.cfg["rgb"][view]; return self._file(Path(self.path), "video/mp4")
+            if parsed.path.startswith("/media/depth/"):
+                return self._file(INSPECTOR.previews[parsed.path.rsplit("/", 1)[-1]], "video/mp4")
             return super().do_GET()
         except Exception as exc: self.send_data(json.dumps({"error": str(exc)}).encode(), "application/json", 404)
     def _file(self, path: Path, content_type: str):
