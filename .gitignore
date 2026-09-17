@@ -41,5 +41,8 @@ pcds/
 # weekly reports
 report/
 
+#Outputs
+outputs/
+
 log.txt
 checkpoints
