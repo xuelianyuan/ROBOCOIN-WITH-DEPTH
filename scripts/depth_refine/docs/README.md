@@ -196,11 +196,26 @@ python scripts/depth_refine/run_refine.py \
 | `--allow-unvalidated` | 关闭 | 未满足指标改善条件时仍生成视频 |
 | `--max-depth-mm` | `4095` | 映射输出上限；编码器仍会裁剪到 4095 |
 | `--plot-trend` | 关闭 | 保存逐采样帧均值及 Wasserstein 趋势图 |
+| `--report-mapping-slope` | 关闭 | 保存映射斜率摘要及最陡区间，并写入验证报告 |
+| `--save-preencode-npy` | 关闭 | full/rife 逐帧保存编码前 float32 深度 NPY |
 | `--fps` / `--crf` / `--preset` | `30` / `6` / `medium` | 输出视频编码参数 |
 
 ### 如何阅读验证报告
 
 `refine_parameters.json` 包含映射参数、采样索引、迁移前 `baseline` 指标、迁移后 `transferred` 指标及逐帧 `frame_metrics`。此处报告字段 `baseline` 指的是迁移前的原深度指标，与磁盘上的 Nested baseline 目录含义不同。
+
+排查灰度色斑时可在 full 命令后追加：
+
+```bash
+--report-mapping-slope --save-preencode-npy
+```
+
+斜率结果位于报告目录的 `mapping_slope.json`，并同时写入
+`refine_parameters.json` 的 `mapping_slope` 字段。`slope > 1` 表示该深度区间
+会放大源深度变化。编码前帧位于
+`<result-root>/refine/preencode/<chunk>/<camera-depth-refined>/<episode>/`，每帧为
+一个 float32 NPY；它们尚未经历 uint16 截断及 H.265 编码。以同目录的
+`manifest.json` 为准读取本次运行的帧数和文件列表。
 
 | 指标 | 含义 |
 |---|---|

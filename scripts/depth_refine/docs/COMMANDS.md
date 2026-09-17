@@ -9,7 +9,7 @@
 
 ```bash
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
-DATASET="data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000"
+DATASET="data/lerobot/ai2_depth_preview/AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000"
 RESULT_ROOT="$DATASET/depth_results"
 CHUNK="chunk-000"
 EPISODE="episode_000000"
@@ -30,7 +30,7 @@ use_camera() {
   printf '当前视角：%s\nRGB：%s\n原始深度：%s\n修正深度：%s\n' "$CAMERA" "$RGB" "$BEFORE" "$AFTER"
 }
 
-use_camera left_wrist  # 默认头部视角
+use_camera head  # 默认头部视角
 ```
 
 ### 快速切换三个相机视角
@@ -68,7 +68,8 @@ python scripts/depth_refine/run_refine.py \
 # 逐帧迁移，生成 AFTER 对应的视频
 python scripts/depth_refine/run_refine.py \
   --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
-  --camera "$CAMERA" --mapping quantile --stage full
+  --camera "$CAMERA" --mapping quantile --stage full \
+  --report-mapping-slope --save-preencode-npy
 
 # 可选：RIFE 补帧，单独保存以便与 full 比较
 python scripts/depth_refine/run_refine.py \
