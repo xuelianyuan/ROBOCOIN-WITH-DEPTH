@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""Compare pre-encode depth, decoded gray12le depth and an optional browser preview.
+"""深度图斑块诊断：比较编码前、深度视频解码后和网页预览三个阶段的数据。
 
-Requires numpy, Pillow, ffmpeg and ffprobe. See compare_depth_artifacts.md.
+功能：
+    1. 按帧号读取 gray12le 深度视频，可选读取同帧的编码前 NPY 和 H.264 预览。
+    2. 将 NPY 转换到编码数值域，模拟裁剪和整数截断，分别计算量化、编码及总误差。
+    3. 使用统一灰度范围显示深度图，支持局部裁剪，并比较预览与直接归一化图像。
+    4. 输出对比 PNG、深度及误差 NPY、误差统计 JSON 和横截面深度 CSV。
+
+限制：不运行模型；缺少编码前 NPY 时，不能区分模型输出与深度编码的影响。
+深度误差的单位取决于编码数值域，预览误差则使用 0–255 显示值域。
+依赖：numpy、Pillow、ffmpeg、ffprobe。命令示例见同目录 compare_depth_artifacts.md。
 """
 import argparse
 import json
@@ -12,7 +20,10 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 
+# ============================== 一、视频帧读取 ==============================
+
 def decode(path, frame, pixel_format):
+    """按从 0 开始的帧号解码，检查像素格式及字节数，避免隐式转换深度位数。"""
     info = json.loads(subprocess.check_output([
         'ffprobe', '-v', 'error', '-select_streams', 'v:0',
         '-show_entries', 'stream=width,height,pix_fmt', '-of', 'json', str(path)
@@ -32,7 +43,10 @@ def decode(path, frame, pixel_format):
     return np.frombuffer(raw, dtype=dtype).reshape(shape).copy()
 
 
+# ============================== 二、误差统计 ==============================
+
 def metrics(a, b, valid):
+    """仅统计掩码内的像素；偏差 bias 的方向为 a 减 b。"""
     delta = (a.astype(float) - b.astype(float))[valid]
     if not delta.size:
         return {'valid_pixels': 0}
@@ -42,7 +56,10 @@ def metrics(a, b, valid):
             'max_abs_error': float(np.abs(delta).max()), 'bias': float(delta.mean())}
 
 
+# ============================== 三、诊断主流程 ==============================
+
 def main():
+    # ---------- 3.1 解析输入路径、帧号、数值域转换及显示参数 ----------
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--depth-video', type=Path, required=True)
     parser.add_argument('--frame', type=int, default=0, help='Zero-based source frame index')
@@ -60,6 +77,7 @@ def main():
         parser.error('Frame indices must be nonnegative')
     if args.preview_video and args.range is None:
         parser.error('--preview-video requires the exact Inspector --range MIN MAX')
+    # ---------- 3.2 读取深度视频并确定局部比较区域 ----------
     depth = decode(args.depth_video, args.frame, 'gray12le')
     h, w = depth.shape
     x, y, cw, ch = args.crop or (0, 0, w, h)
@@ -67,6 +85,7 @@ def main():
         parser.error('--crop must be inside the depth image')
     crop = np.s_[y:y + ch, x:x + cw]
     arrays = {'B_decoded': depth.astype(float)}
+    # ---------- 3.3 可选加载编码前数据，模拟编码器的量化步骤 ----------
     if args.raw_npy:
         raw = np.load(args.raw_npy, allow_pickle=False)
         if raw.ndim == 3:
@@ -75,6 +94,7 @@ def main():
             raise ValueError(f'NPY shape {raw.shape} differs from depth {depth.shape}; no automatic resizing')
         raw = raw.astype(float) * args.raw_scale + args.raw_offset
         arrays = {'A_raw': raw, 'A_quantized': np.trunc(np.clip(raw, 0, 4095)), **arrays}
+    # ---------- 3.4 确定统一灰度范围并初始化诊断报告 ----------
     valid_depth = (depth > 0) & (depth < 4095)
     if not valid_depth.any():
         raise ValueError('No valid decoded depth pixels')
@@ -90,7 +110,9 @@ def main():
                         'Without pre-encode NPY, model errors cannot be separated from source encoding errors.',
                         'Preview comparison includes 8-bit video compression and color conversion; browser GPU rendering is not tested.']}
 
+    # ---------- 3.5 保存各阶段数据及固定范围的灰度图 ----------
     def add_panel(name, pixels):
+        """保存单张图片，同时收集到最终对比图中。"""
         image = Image.fromarray(pixels).convert('RGB')
         image.save(args.output / f'{name}.png')
         panels.append((name, image))
@@ -104,7 +126,9 @@ def main():
         np.save(args.output / f'{name}.npy', data[crop])
         add_panel(name, gray[crop])
 
+    # ---------- 3.6 计算局部误差，保存带符号数组与绝对误差图 ----------
     def compare(name, a, b, valid):
+        """误差图各自按最大绝对误差拉伸；白色对应数值写入报告。"""
         a, b, valid = a[crop], b[crop], valid[crop]
         report['metrics'][name] = metrics(a, b, valid)
         delta = a.astype(float) - b.astype(float)
@@ -117,19 +141,22 @@ def main():
         report['metrics'][name]['error_image_white_equals'] = maximum
         add_panel(f'{name}_abs_error', error)
 
+    # ---------- 3.7 拆分量化误差、视频编码误差和总深度误差 ----------
     if args.raw_npy:
         valid = np.isfinite(arrays['A_raw']) & (arrays['A_raw'] > 0) & (arrays['A_raw'] < 4095) & valid_depth
         compare('quantization', arrays['A_quantized'], arrays['A_raw'], valid)
         compare('codec', arrays['B_decoded'], arrays['A_quantized'], valid)
         compare('total_depth', arrays['B_decoded'], arrays['A_raw'], valid)
         report['raw_clipped_or_invalid_pixels'] = int((~(np.isfinite(arrays['A_raw']) & (arrays['A_raw'] > 0) & (arrays['A_raw'] < 4095)))[crop].sum())
+    # ---------- 3.8 比较网页预览与深度直接归一化后的 8 位图 ----------
     if args.preview_video:
         preview = decode(args.preview_video, args.preview_frame if args.preview_frame is not None else args.frame, 'rgb24')
         if preview.shape[:2] not in ((h, w), (h + h % 2, w + w % 2)):
             raise ValueError('Preview dimensions do not match depth, allowing only Inspector even-size padding')
-        preview = preview[:h, :w, 0]  # Inspector histogram also samples the red channel.
+        preview = preview[:h, :w, 0]  # 与 Inspector 直方图一致，取红色通道。
         add_panel('C_preview_red', preview[crop])
         compare('preview_vs_B_8bit', preview, rendered['B_decoded'], np.ones(depth.shape, bool))
+    # ---------- 3.9 拼接对比图，导出横截面曲线及 JSON 报告 ----------
     panel_w, panel_h = max(cw, 280), ch + 30
     sheet = Image.new('RGB', (panel_w * min(3, len(panels)), panel_h * ((len(panels) + 2) // 3)), '#202020')
     draw = ImageDraw.Draw(sheet)
@@ -138,7 +165,7 @@ def main():
         draw.text((px + 5, py + 8), name, fill='white')
         sheet.paste(image, (px, py + 30))
     sheet.save(args.output / 'comparison.png')
-    # Numeric cross-section makes depth steps visible without a plotting dependency.
+    # 导出裁剪区域中间一行的深度值，便于检查阶梯变化，无需额外绘图库。
     row = ch // 2
     names = list(arrays)
     np.savetxt(args.output / 'profile.csv', np.column_stack([np.arange(x, x + cw)] + [arrays[n][crop][row] for n in names]),
@@ -147,6 +174,8 @@ def main():
     (args.output / 'report.json').write_text(json.dumps(report, indent=2, allow_nan=False) + '\n')
     print(f"Saved comparison.png, report.json, profile.csv and arrays to {args.output}")
 
+
+# ============================== 四、命令行入口 ==============================
 
 if __name__ == '__main__':
     main()
