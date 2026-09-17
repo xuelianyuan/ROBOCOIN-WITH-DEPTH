@@ -29,6 +29,7 @@ import numpy as np
 import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.depth_refine.timing import episode_timer
 from src.depth_encoder import DepthVideoEncoder
 
 
@@ -203,65 +204,73 @@ def main() -> None:
         source_dir = rgb_dir.parent / f"{base_name}{args.input_depth_suffix}"
         refined_dir = out_root / rgb_dir.parent.name / f"observation.images.{camera}_depth_refined"
         for source_path in sorted(source_dir.glob("episode_*.mp4")):
-            ep_out = _statistics_episode(stat_root, camera, source_path.stem)
-            if ep_out is None:
-                continue
-            metadata = json.loads((ep_out / "sample_indices.json").read_text())
-            indices = [int(i) for i in metadata["sample_frame_indices"]]
-            source = _decode(source_path, args.input_pix_fmt)
-            valid_ids = [i for i in indices if i < len(source)
-                         and (ep_out / f"frame_{i:09d}.npy").exists()]
-            nested = [np.load(ep_out / f"frame_{i:09d}.npy") for i in valid_ids]
-            sampled = [source[i] for i in valid_ids]
-            pairs = [_valid_pair(x, y) for x, y in zip(sampled, nested)]
-            pairs = [(x, y) for x, y in pairs if x.size]
-            if not pairs:
-                continue
-            x = np.concatenate([v[0] for v in pairs])
-            y = np.concatenate([v[1] for v in pairs])
-            mapping = _fit_mapping(x, y, args.mapping, args.quantiles)
-            transferred = [_apply_mapping(f, mapping, args.max_depth_mm) for f in sampled]
-            before, after = _metrics(sampled, nested), _metrics(transferred, nested)
-            improved = all(after.get(k, float("inf")) < before.get(k, float("inf"))
-                           for k in ("mae_mm", "rmse_mm", "wasserstein_mm"))
-            frame_before = [_metrics([a], [b]) for a, b in zip(sampled, nested)]
-            frame_after = [_metrics([a], [b]) for a, b in zip(transferred, nested)]
-            report = {"mapping": mapping, "stage": args.stage, "baseline": before,
-                      "transferred": after, "improved": improved, "sample_indices": valid_ids,
-                      "frame_metrics": [{"frame_index": i, "baseline": b, "transferred": a}
-                                        for i, b, a in zip(valid_ids, frame_before, frame_after)]}
-            report_path = report_root / camera / source_path.stem / "refine_parameters.json"
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            report_path.write_text(json.dumps(report, indent=2))
-            if args.plot_trend:
-                _plot_trend(report_path.with_name("refine_trend.png"), valid_ids, frame_before, frame_after)
-            if args.stage == "validate":
+            with episode_timer(result_root, stage=f"refine_{args.stage}", camera=camera,
+                               source=source_path, mapping=args.mapping) as timing:
+                ep_out = _statistics_episode(stat_root, camera, source_path.stem)
+                if ep_out is None:
+                    timing["reason"] = "missing_baseline"
+                    continue
+                metadata = json.loads((ep_out / "sample_indices.json").read_text())
+                indices = [int(i) for i in metadata["sample_frame_indices"]]
+                source = _decode(source_path, args.input_pix_fmt)
+                valid_ids = [i for i in indices if i < len(source)
+                             and (ep_out / f"frame_{i:09d}.npy").exists()]
+                nested = [np.load(ep_out / f"frame_{i:09d}.npy") for i in valid_ids]
+                sampled = [source[i] for i in valid_ids]
+                pairs = [_valid_pair(x, y) for x, y in zip(sampled, nested)]
+                pairs = [(x, y) for x, y in pairs if x.size]
+                if not pairs:
+                    timing["reason"] = "no_valid_pairs"
+                    continue
+                x = np.concatenate([v[0] for v in pairs])
+                y = np.concatenate([v[1] for v in pairs])
+                mapping = _fit_mapping(x, y, args.mapping, args.quantiles)
+                transferred = [_apply_mapping(f, mapping, args.max_depth_mm) for f in sampled]
+                before, after = _metrics(sampled, nested), _metrics(transferred, nested)
+                improved = all(after.get(k, float("inf")) < before.get(k, float("inf"))
+                               for k in ("mae_mm", "rmse_mm", "wasserstein_mm"))
+                frame_before = [_metrics([a], [b]) for a, b in zip(sampled, nested)]
+                frame_after = [_metrics([a], [b]) for a, b in zip(transferred, nested)]
+                report = {"mapping": mapping, "stage": args.stage, "baseline": before,
+                          "transferred": after, "improved": improved, "sample_indices": valid_ids,
+                          "frame_metrics": [{"frame_index": i, "baseline": b, "transferred": a}
+                                            for i, b, a in zip(valid_ids, frame_before, frame_after)]}
+                report_path = report_root / camera / source_path.stem / "refine_parameters.json"
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(json.dumps(report, indent=2))
+                if args.plot_trend:
+                    _plot_trend(report_path.with_name("refine_trend.png"), valid_ids, frame_before, frame_after)
+                timing.update(source_num_frames=len(source), sample_num_frames=len(valid_ids))
+                if args.stage == "validate":
+                    timing["status"] = "completed"
+                    processed += 1
+                    continue
+                if not improved and not args.allow_unvalidated:
+                    timing["reason"] = "unvalidated_transfer"
+                    print(f"Skip unvalidated transfer: {source_path}", file=sys.stderr)
+                    continue
+                if args.stage == "full":
+                    output = [_apply_mapping(f, mapping, args.max_depth_mm) for f in source]
+                else:
+                    rgb = _decode(rgb_dir / source_path.name, "rgb24")
+                    if len(rgb) != len(source):
+                        raise RuntimeError(f"RGB/depth frame count mismatch: {source_path}")
+                    from src.depth_repair.da3_rife import DA3RIFEDepthRepair
+                    rife = DA3RIFEDepthRepair(sample_stride=1)
+                    rife._load_rife()
+                    output = rife._interpolate(
+                        [rgb[i] for i in valid_ids], transferred, valid_ids,
+                        len(rgb), rgb[0].shape[0], rgb[0].shape[1],
+                    )
+                refined_dir.mkdir(parents=True, exist_ok=True)
+                out_path = refined_dir / source_path.name
+                rc = encoder.encode_from_arrays(output, str(out_path))
+                if rc:
+                    raise RuntimeError(f"ffmpeg encode failed ({rc}): {out_path}")
+                report.update({"output_video": str(out_path), "output_num_frames": len(output)})
+                report_path.write_text(json.dumps(report, indent=2))
                 processed += 1
-                continue
-            if not improved and not args.allow_unvalidated:
-                print(f"Skip unvalidated transfer: {source_path}", file=sys.stderr)
-                continue
-            if args.stage == "full":
-                output = [_apply_mapping(f, mapping, args.max_depth_mm) for f in source]
-            else:
-                rgb = _decode(rgb_dir / source_path.name, "rgb24")
-                if len(rgb) != len(source):
-                    raise RuntimeError(f"RGB/depth frame count mismatch: {source_path}")
-                from src.depth_repair.da3_rife import DA3RIFEDepthRepair
-                rife = DA3RIFEDepthRepair(sample_stride=1)
-                rife._load_rife()
-                output = rife._interpolate(
-                    [rgb[i] for i in valid_ids], transferred, valid_ids,
-                    len(rgb), rgb[0].shape[0], rgb[0].shape[1],
-                )
-            refined_dir.mkdir(parents=True, exist_ok=True)
-            out_path = refined_dir / source_path.name
-            rc = encoder.encode_from_arrays(output, str(out_path))
-            if rc:
-                raise RuntimeError(f"ffmpeg encode failed ({rc}): {out_path}")
-            report.update({"output_video": str(out_path), "output_num_frames": len(output)})
-            report_path.write_text(json.dumps(report, indent=2))
-            processed += 1
+                timing["status"] = "completed"
     print(f"Processed {processed} episode(s); results under {stat_root}")
 
 

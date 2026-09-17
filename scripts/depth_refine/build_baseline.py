@@ -30,6 +30,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.depth_refine.timing import episode_timer
 from src.depth_encoder import DepthVideoEncoder
 from src.depth_repair import create_depth_repair
 
@@ -178,54 +179,58 @@ def main() -> None:
             marker = ep_out / "statistics.json"
             if marker.exists() and not args.force:
                 continue
-            # 先完整解码 RGB，后续仅选取少量帧送入深度修复器。
-            rgb = _decode_rgb_video(video_path)
-            if not rgb:
-                print(f"Skipping undecodable video: {video_path}", file=sys.stderr)
-                continue
-            # 等间隔采样并始终保留首尾帧，保证稀疏结果覆盖完整时间范围。
-            indices = _sample_indices(len(rgb), args.sample_count)
-            sampled_rgb = [rgb[i] for i in indices]
-            # 只把采样后的 RGB 送入 Nested；这里不会生成伪造的完整时间轴。
-            # 第二个参数保留为空，表示没有额外的真实深度约束；返回值
-            # 与 sampled_rgb 一一对应，不能误当成完整视频帧序列。
-            nested = repair.repair_frames(sampled_rgb, []) if sampled_rgb else []
-            ep_out.mkdir(parents=True, exist_ok=True)
-            # 每个采样结果以毫米为单位保存为 uint16 PNG 和 NPY。
-            for frame_idx, depth in zip(indices, nested):
-                depth_u16 = np.clip(np.rint(depth), 0, 65535).astype(np.uint16)
-                cv2.imwrite(str(ep_out / f"frame_{frame_idx:09d}.png"), depth_u16)
-                np.save(ep_out / f"frame_{frame_idx:09d}.npy", depth_u16)
-            with open(ep_out / "sample_indices.json", "w") as f:
-                json.dump({"source_video": str(video_path), "source_num_frames": len(rgb),
-                           "sample_count": len(indices), "fps": args.fps,
-                           "sample_frame_indices": indices}, f, indent=2)
-            # 可选地把稀疏结果编码成灰度深度视频；视频帧数仍等于采样数。
-            if args.save_video and nested:
-                sparse_dir.mkdir(parents=True, exist_ok=True)
-                rc = encoder.encode_from_arrays(nested, str(sparse_dir / video_path.name))
-                if rc != 0:
-                    raise RuntimeError(f"ffmpeg failed ({rc}): {video_path}")
-                (ep_out / "manifest.json").write_text(json.dumps({
-                    "source_video": str(video_path),
-                    "sparse_video": str(sparse_dir / video_path.name),
-                    "source_num_frames": len(rgb), "sparse_num_frames": len(nested),
-                    "source_fps": args.fps, "sparse_fps": args.fps,
-                    "sample_frame_indices": indices,
-                }, indent=2))
-            # 写入汇总标记，记录模型、采样位置及全局/逐帧统计，支持断点续跑。
-            with open(marker, "w") as f:
-                json.dump({"camera": camera_name, "episode": episode,
-                           "strategy": args.strategy, "model_id": model_id,
-                           "source_num_frames": len(rgb), "sample_indices": indices,
-                           "stats": _stats(nested),
-                           "sampled_frames": [
-                               {"frame_index": int(i), "npy": f"frame_{i:09d}.npy",
-                                "stats": _frame_stats(d)}
-                               for i, d in zip(indices, nested)
-                           ],
-                           "video_format": {"codec": "libx265", "pix_fmt": "gray12le",
-                                            "fps": args.fps}}, f, indent=2)
+            with episode_timer(result_root, stage=args.strategy, camera=camera_name,
+                               source=video_path, model_id=model_id,
+                               sample_count=args.sample_count) as timing:
+                # 先完整解码 RGB，后续仅选取少量帧送入深度修复器。
+                rgb = _decode_rgb_video(video_path)
+                if not rgb:
+                    print(f"Skipping undecodable video: {video_path}", file=sys.stderr)
+                    continue
+                # 等间隔采样并始终保留首尾帧，保证稀疏结果覆盖完整时间范围。
+                indices = _sample_indices(len(rgb), args.sample_count)
+                sampled_rgb = [rgb[i] for i in indices]
+                # 只把采样后的 RGB 送入 Nested；这里不会生成伪造的完整时间轴。
+                # 第二个参数保留为空，表示没有额外的真实深度约束；返回值
+                # 与 sampled_rgb 一一对应，不能误当成完整视频帧序列。
+                nested = repair.repair_frames(sampled_rgb, []) if sampled_rgb else []
+                ep_out.mkdir(parents=True, exist_ok=True)
+                # 每个采样结果以毫米为单位保存为 uint16 PNG 和 NPY。
+                for frame_idx, depth in zip(indices, nested):
+                    depth_u16 = np.clip(np.rint(depth), 0, 65535).astype(np.uint16)
+                    cv2.imwrite(str(ep_out / f"frame_{frame_idx:09d}.png"), depth_u16)
+                    np.save(ep_out / f"frame_{frame_idx:09d}.npy", depth_u16)
+                with open(ep_out / "sample_indices.json", "w") as f:
+                    json.dump({"source_video": str(video_path), "source_num_frames": len(rgb),
+                               "sample_count": len(indices), "fps": args.fps,
+                               "sample_frame_indices": indices}, f, indent=2)
+                # 可选地把稀疏结果编码成灰度深度视频；视频帧数仍等于采样数。
+                if args.save_video and nested:
+                    sparse_dir.mkdir(parents=True, exist_ok=True)
+                    rc = encoder.encode_from_arrays(nested, str(sparse_dir / video_path.name))
+                    if rc != 0:
+                        raise RuntimeError(f"ffmpeg failed ({rc}): {video_path}")
+                    (ep_out / "manifest.json").write_text(json.dumps({
+                        "source_video": str(video_path),
+                        "sparse_video": str(sparse_dir / video_path.name),
+                        "source_num_frames": len(rgb), "sparse_num_frames": len(nested),
+                        "source_fps": args.fps, "sparse_fps": args.fps,
+                        "sample_frame_indices": indices,
+                    }, indent=2))
+                # 写入汇总标记，记录模型、采样位置及全局/逐帧统计，支持断点续跑。
+                with open(marker, "w") as f:
+                    json.dump({"camera": camera_name, "episode": episode,
+                               "strategy": args.strategy, "model_id": model_id,
+                               "source_num_frames": len(rgb), "sample_indices": indices,
+                               "stats": _stats(nested),
+                               "sampled_frames": [
+                                   {"frame_index": int(i), "npy": f"frame_{i:09d}.npy",
+                                    "stats": _frame_stats(d)}
+                                   for i, d in zip(indices, nested)
+                               ],
+                               "video_format": {"codec": "libx265", "pix_fmt": "gray12le",
+                                                "fps": args.fps}}, f, indent=2)
+                timing.update(status="completed", source_num_frames=len(rgb), sample_num_frames=len(nested))
     print(f"Nested analysis complete: {stats_root}")
 
 

@@ -157,3 +157,34 @@ python scripts/depth_refine/inspect_dataset.py \
 交互快捷键：`←/→` 切帧，`Shift` 加速 10 帧，`Ctrl` 加速 100 帧，`↑/↓` 切 episode，`w/s/a/d` 旋转点云，`p` 保存，`q` 退出。外部视频对比时留在对应 episode 内。
 
 PCD 导出要求数据路径含 `<dataset>_depth_preview/<task>`，且 baseline 的稀疏视频与 `manifest.json` 均已生成。
+
+## 6. 每条 episode 的 Nested / refine 耗时
+
+新版 baseline/refine 自动记录每个 episode、每个视角的处理耗时（秒），无需额外开关。
+沿用前面的公共配置，处理当前数据集的三个视角并生成完整 refine 视频：
+
+```bash
+for VIEW in cam_front_head cam_left_wrist cam_right_wrist; do
+  python scripts/depth_refine/build_baseline.py \
+    --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
+    --camera "$VIEW" --sample-count 20 --save-video --force || break
+  python scripts/depth_refine/run_refine.py \
+    --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
+    --camera "$VIEW" --mapping quantile --stage full || break
+done
+
+# 三视角明细 + 每条 episode 的三视角合计
+python scripts/depth_refine/summarize_timings.py --result-root "$RESULT_ROOT"
+
+# 或只统计 use_camera 当前选中的视角
+python scripts/depth_refine/summarize_timings.py \
+  --result-root "$RESULT_ROOT" --cameras "$CAMERA"
+```
+
+- `timings/per_view.csv`：每条 episode × 单视角 × 阶段的秒数、状态和帧数。
+- `timings/per_episode.csv`：每条 episode 按阶段汇总所选视角；缺失、跳过或失败时合计留空，并列出缺失视角。
+- `timings/<stage>/<chunk>/<camera>/<episode>.json`：保留该阶段最近一次实际尝试。阶段分别为 `da3_nested`（或 `da3`）、`refine_validate`、`refine_full`、`refine_rife`，不会混算。
+
+耗时为单视频处理的墙钟时间，包括读取/解码、计算、统计、结果写入及可选编码/绘图；不包括进程启动和 episode 外的初始化。模型按需加载，因此首次推理的模型加载开销计入首条 episode。三视角合计为各视角耗时之和，不代表并行处理时的实际等待时间。
+
+旧结果没有计时数据，不能用文件时间戳准确还原。上述 `--force` 会重新生成 baseline 并覆盖其结果和计时；不加时已有 baseline 直接跳过、保留原计时。refine 每次重新处理并更新对应阶段计时。验证未通过而跳过视频的 full/rife 记录标为 `skipped`，不算完整 refine。汇总命令每次覆盖两份 CSV，原始 JSON 保留。

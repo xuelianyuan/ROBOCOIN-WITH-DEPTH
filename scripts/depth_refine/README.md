@@ -425,3 +425,9 @@ python scripts/depth_refine/run_batch.py --help
 python scripts/depth_refine/plot_comparison.py --help
 python scripts/depth_refine/inspect_dataset.py --help
 ```
+
+## 9. 逐 episode、逐视角耗时
+
+baseline/refine 自动将最近一次处理的墙钟耗时写入 `depth_results/timings/`，包含每个视角的独立记录，区分 Nested/Metric 和 refine 的 validate/full/rife 阶段。运行 `python scripts/depth_refine/summarize_timings.py --result-root "$RESULT_ROOT"` 导出单视角明细 `per_view.csv` 和三视角合计 `per_episode.csv`。缺失或未完成的视角不会按零秒计入完整合计。
+
+三视角运行、单视角筛选和计时范围见[命令速查第 6 节](COMMANDS.md#6-每条-episode-的-nested--refine-耗时)。旧结果需要重新运行才能得到真实耗时。
