@@ -8,13 +8,13 @@
 
 | 脚本 | 作用 | 输入 | 主要输出 |
 |---|---|---|---|
-| [build_baseline.py](build_baseline.py) | 均匀采样 RGB，使用 DA3 Nested（或 Metric）生成参考深度 | 单个数据集的 RGB 视频 | PNG/NPY 采样帧、统计 JSON、可选稀疏深度视频 |
-| [run_refine.py](run_refine.py) | 拟合原深度到参考深度的映射，验证并生成完整结果 | 原始深度视频、baseline 采样帧 | 指标报告、可选趋势图和 refined 视频 |
-| [run_batch.py](run_batch.py) | 遍历多个项目、多个相机，依次调用 baseline/refine 或绘制均值曲线 | 包含多个数据集的根目录 | 各项目独立的 `depth_results/` |
-| [plot_comparison.py](plot_comparison.py) | 绘制原始、修正后和 Nested 的 3×3 对比图 | 两个完整深度视频、对应 Nested 采样帧 | 点云、深度图、直方图组成的 PNG |
-| [inspect_dataset.py](inspect_dataset.py) | 交互浏览 RGB/深度/点云，对比外部深度，或批量导出 PCD | LeRobot 数据集或三套深度视频 | Matplotlib 窗口、binary PCD 文件 |
+| [build_baseline.py](../build_baseline.py) | 均匀采样 RGB，使用 DA3 Nested（或 Metric）生成参考深度 | 单个数据集的 RGB 视频 | PNG/NPY 采样帧、统计 JSON、可选稀疏深度视频 |
+| [run_refine.py](../run_refine.py) | 拟合原深度到参考深度的映射，验证并生成完整结果 | 原始深度视频、baseline 采样帧 | 指标报告、可选趋势图和 refined 视频 |
+| [run_batch.py](../run_batch.py) | 遍历多个项目、多个相机，依次调用 baseline/refine 或绘制均值曲线 | 包含多个数据集的根目录 | 各项目独立的 `depth_results/` |
+| [plot_comparison.py](../plot_comparison.py) | 绘制原始、修正后和 Nested 的 3×3 对比图 | 两个完整深度视频、对应 Nested 采样帧 | 点云、深度图、直方图组成的 PNG |
+| [inspect_dataset.py](../inspect_dataset.py) | 交互浏览 RGB/深度/点云，对比外部深度，或批量导出 PCD | LeRobot 数据集或三套深度视频 | Matplotlib 窗口、binary PCD 文件 |
 
-公共路径和采样索引工具位于 [src/depth_refine/io_utils.py](../../src/depth_refine/io_utils.py)。原始 LeRobot 加载入口仍为 [scripts/load_lerobot.py](../load_lerobot.py)；本目录的扩展检查功能使用 `inspect_dataset.py`。
+公共路径和采样索引工具位于 [src/depth_refine/io_utils.py](../../../src/depth_refine/io_utils.py)。原始 LeRobot 加载入口仍为 [scripts/load_lerobot.py](../../load_lerobot.py)；本目录的扩展检查功能使用 `inspect_dataset.py`。
 
 典型处理顺序：
 
@@ -36,7 +36,7 @@ RGB 视频 ── build_baseline.py ── 稀疏参考 NPY / 统计 / 可选视
 
 ### 环境和工作目录
 
-先按[项目 README](../../README.md)准备基础环境。各功能实际依赖如下：
+先按[项目 README](../../../README.md)准备基础环境。各功能实际依赖如下：
 
 | 功能 | 依赖 |
 |---|---|
