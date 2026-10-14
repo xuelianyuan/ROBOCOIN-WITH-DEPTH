@@ -144,6 +144,11 @@ def _fit_mapping(x: np.ndarray, y: np.ndarray, method: str, quantiles: int) -> d
     source, unique_idx = np.unique(source, return_index=True)
     return {"method": method, "source_quantiles_mm": source.tolist(),
             "target_quantiles_mm": target[unique_idx].tolist(),
+            # 12-bit 深度量化可能让多个分位点对应同一个源深度值。分别记录
+            # 请求值和去重后的有效值，避免仅凭映射节点数误判实验配置。
+            "requested_quantiles": int(max(3, quantiles)),
+            "effective_quantile_nodes": int(source.size),
+            "mapping_segments": int(max(0, source.size - 1)),
             "fit_samples": int(x.size)}
 
 
@@ -274,7 +279,8 @@ def main() -> None:
     p.add_argument("--input-pix-fmt", default="gray12le", choices=["gray12le", "gray16le"])
     p.add_argument("--mapping", default="quantile", choices=["quantile", "linear"],
                    help="quantile 即一维最优传输/直方图匹配")
-    p.add_argument("--quantiles", type=int, default=1001)
+    p.add_argument("--quantiles", type=int, default=101,
+                   help="quantile 映射请求的分位点数；默认 q101，重复源节点会去重")
     p.add_argument("--stage", default="validate", choices=["validate", "full", "rife"],
                    help="validate 只评估；full 迁移完整输入；rife 从迁移后采样帧补齐")
     p.add_argument("--allow-unvalidated", action="store_true",

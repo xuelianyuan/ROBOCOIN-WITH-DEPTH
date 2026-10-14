@@ -3,6 +3,7 @@ import json
 import numpy as np
 
 from scripts.depth_refine.run_refine import (
+    _fit_mapping,
     _mapping_slope_report,
     _save_preencode_frames,
 )
@@ -22,6 +23,19 @@ def test_mapping_slope_report_finds_steepest_quantile_segment():
     assert report["segments_above_2"] == 1
     assert report["steepest_segments"][0]["source_start_mm"] == 10
     assert report["steepest_segments"][0]["source_end_mm"] == 20
+
+
+def test_fit_mapping_records_requested_and_effective_quantiles():
+    # 重复输入模拟量化深度：请求 q101 后，有效节点数允许因去重而减少，
+    # 但报告必须保留原始配置，避免将有效节点数误认为实验参数。
+    source = np.repeat(np.arange(11, dtype=np.float64), 20)
+    target = source * 2
+
+    mapping = _fit_mapping(source, target, method="quantile", quantiles=101)
+
+    assert mapping["requested_quantiles"] == 101
+    assert mapping["effective_quantile_nodes"] == len(mapping["source_quantiles_mm"])
+    assert mapping["mapping_segments"] == mapping["effective_quantile_nodes"] - 1
 
 
 def test_save_preencode_frames_preserves_float_values(tmp_path):

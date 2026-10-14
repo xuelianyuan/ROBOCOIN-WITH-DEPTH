@@ -9,7 +9,7 @@
 
 ```bash
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
-DATASET="data/lerobot/ai2_depth_preview/AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000"
+DATASET="data/lerobot/ai2_depth_preview/AI2_Alphabot_2_heat_test_tube_0_qced_hardlink_ep000000"
 RESULT_ROOT="$DATASET/depth_results"
 CHUNK="chunk-000"
 EPISODE="episode_000000"
@@ -30,7 +30,7 @@ use_camera() {
   printf '当前视角：%s\nRGB：%s\n原始深度：%s\n修正深度：%s\n' "$CAMERA" "$RGB" "$BEFORE" "$AFTER"
 }
 
-use_camera head  # 默认头部视角
+use_camera right_wrist  # 默认头部视角
 ```
 
 ### 快速切换三个相机视角
@@ -52,7 +52,7 @@ use_camera right_wrist  # 右腕：cam_right_wrist
 ```bash
 python scripts/depth_refine/build_baseline.py \
   --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
-  --camera "$CAMERA" --sample-count 20 --save-video
+  --camera "$CAMERA" --sample-count 60 --save-video
 ```
 
 已有统计、需要重新生成或补存视频时，追加 `--force`。

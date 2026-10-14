@@ -4,7 +4,7 @@
 
 ```bash
 python tools/depth_inspector/server.py \
-  --dataset data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
+  --dataset data/lerobot/ai2_depth_preview/AI2_Alphabot_2_heat_test_tube_0_qced_hardlink_ep000000 \
   --port 8765
 
 # 浏览器打开 http://127.0.0.1:8765/outputs/depth_inspector.html

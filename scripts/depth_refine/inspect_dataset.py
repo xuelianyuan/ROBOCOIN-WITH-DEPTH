@@ -4,16 +4,16 @@ LeRobot 数据集可视化：RGB + Depth + Point Cloud（方向键切换帧）�
 
 用法:
 python scripts/load_lerobot.py \
-    --repo-id AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000 \
-    --root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000
+    --repo-id AI2_Alphabot_2_heat_test_tube_0_qced_hardlink_ep000000 \
+    --root data/lerobot/ai2_depth_preview/AI2_Alphabot_2_heat_test_tube_0_qced_hardlink_ep000000
 
 python scripts/load_lerobot.py \
   --generate-pcd \
   --pcd-root pcd \
-  --original-depth "/home/user/RoboCOIN-with-Depth/data/original/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_depth" \
-  --baseline-depth "/home/user/RoboCOIN-with-Depth/data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/depth_results/baseline/videos/chunk-000/observation.images.cam_front_chest_depth_nested_sparse" \
-  --refine-depth "/home/user/RoboCOIN-with-Depth/data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_depth" \
-  --rgb-video "/home/user/RoboCOIN-with-Depth/data/lerobot/ai2_depth_preview/AI2_Alphabot_2_arrange_teaset_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_rgb/episode_000000.mp4" \
+  --original-depth "/home/user/RoboCOIN-with-Depth/data/original/ai2_depth_preview/AI2_Alphabot_2_heat_test_tube_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_depth" \
+  --baseline-depth "/home/user/RoboCOIN-with-Depth/data/lerobot/ai2_depth_preview/AI2_Alphabot_2_heat_test_tube_0_qced_hardlink_ep000000/depth_results/baseline/videos/chunk-000/observation.images.cam_front_chest_depth_nested_sparse" \
+  --refine-depth "/home/user/RoboCOIN-with-Depth/data/lerobot/ai2_depth_preview/AI2_Alphabot_2_heat_test_tube_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_depth" \
+  --rgb-video "/home/user/RoboCOIN-with-Depth/data/lerobot/ai2_depth_preview/AI2_Alphabot_2_heat_test_tube_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_chest_rgb/episode_000000.mp4" \
   --pcd-stride 2 \
   --pcd-max-depth 5000
 """

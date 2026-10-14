@@ -191,7 +191,7 @@ python scripts/depth_refine/run_refine.py \
 | `--input-depth-suffix` | `_depth` | 从 RGB 目录推导源深度目录时使用的后缀 |
 | `--input-pix-fmt` | `gray12le` | 源深度解码格式，可选 `gray16le` |
 | `--mapping` | `quantile` | `quantile` 或 `linear` |
-| `--quantiles` | `1001` | quantile 拟合的分位点数，实际至少 3 个 |
+| `--quantiles` | `101` | quantile 拟合请求的分位点数，实际至少 3 个；重复源节点会去重 |
 | `--stage` | `validate` | `validate` 仅评估；`full` 逐帧映射；`rife` 稀疏关键帧补齐 |
 | `--allow-unvalidated` | 关闭 | 未满足指标改善条件时仍生成视频 |
 | `--max-depth-mm` | `4095` | 映射输出上限；编码器仍会裁剪到 4095 |
@@ -202,7 +202,7 @@ python scripts/depth_refine/run_refine.py \
 
 ### 如何阅读验证报告
 
-`refine_parameters.json` 包含映射参数、采样索引、迁移前 `baseline` 指标、迁移后 `transferred` 指标及逐帧 `frame_metrics`。此处报告字段 `baseline` 指的是迁移前的原深度指标，与磁盘上的 Nested baseline 目录含义不同。
+`refine_parameters.json` 包含映射参数、采样索引、迁移前 `baseline` 指标、迁移后 `transferred` 指标及逐帧 `frame_metrics`。quantile 映射还会记录 `requested_quantiles`、`effective_quantile_nodes` 和 `mapping_segments`，用于区分请求的 q101 配置与量化去重后的实际节点数。此处报告字段 `baseline` 指的是迁移前的原深度指标，与磁盘上的 Nested baseline 目录含义不同。
 
 排查灰度色斑时可在 full 命令后追加：
 
