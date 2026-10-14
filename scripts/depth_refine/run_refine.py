@@ -15,12 +15,13 @@ transport 方法保存该帧直方图的稀疏 OT 矩阵，并通过行重心构
    ``linear`` 在源深度 1%--99% 区间拟合直线。``--mapping-scope episode``
    可恢复合并采样像素、拟合全局映射的旧行为。
 4. ``validate`` 只处理参考帧并写矩阵/报告；逐帧 ``full`` 要求完整同帧参考。
-   ``rife`` 仅适用于 episode scope，由 RGB 引导补齐时间轴。
+   兼容阶段 ``rife`` 先映射稀疏源帧再补齐输出；``rife_refine`` 则先用
+   RGB-RIFE 将稀疏 Nested 补成稠密参考，再逐帧映射原始 Metric。
 5. 输出先裁剪至 ``max_depth_mm``，随后编码器再裁剪至 12-bit [0, 4095]、
    转为 uint16，并用 gray12le/libx265 写视频；当前调用不会做 min-max 归一化。
 
 诊断选项：``--report-mapping-slope`` 输出映射曲线各段的斜率摘要和最陡区间；
-``--save-preencode-npy`` 将 full/rife 的编码前 float32 帧逐帧保存，便于和视频
+``--save-preencode-npy`` 将 full/rife/rife_refine 的编码前 float32 帧逐帧保存，便于和视频
 解码结果比较，从而区分映射伪影与量化、编码伪影。
 
 所以报告中的直方图改善不保证每个空间区域都改善。诊断灰度色斑
@@ -51,7 +52,8 @@ from src.depth_refine.methods.mapping import (
     _valid_pair, _fit_mapping, _apply_mapping, _mapping_slope_report,
 )
 from src.depth_refine.pipeline.frame_transfer import (
-    transfer_frames, require_frame_references, frame_timing_summary,
+    transfer_frames, transfer_array_frames, require_frame_references,
+    frame_timing_summary,
 )
 from src.depth_refine.timing import episode_timer
 from src.depth_refine.io_utils import iter_video_frames
@@ -152,6 +154,47 @@ def _plot_trend(path: Path, ids: list[int], before: list[dict], after: list[dict
     fig.tight_layout(); fig.savefig(path, dpi=150); plt.close(fig)
 
 
+def _interpolate_nested_reference(
+    rgb: list[np.ndarray], reference_dir: Path, anchor_indices: list[int],
+) -> list[np.ndarray]:
+    """用锚点 RGB 求 RIFE 光流，将稀疏 Nested 深度补成完整时间轴。
+
+    RIFE 不直接把深度灰度图当作 RGB 插帧；它从锚点 RGB 估计运动，再把
+    毫米深度双向 warp 到中间时刻。首尾帧都必须有真实 Nested 锚点，避免
+    外推或静默生成零深度尾帧。
+    """
+    if not rgb:
+        raise ValueError("RGB sequence is empty")
+    indices = sorted(anchor_indices)
+    if len(indices) < 2:
+        raise ValueError("rife_refine requires at least two Nested anchors")
+    if len(set(indices)) != len(indices):
+        raise ValueError("Nested anchor indices are duplicated")
+    if indices[0] != 0 or indices[-1] != len(rgb) - 1:
+        raise ValueError(
+            "rife_refine requires Nested anchors at frame 0 and the final frame; "
+            "build the baseline with --sample-count or --sample-stride 1")
+
+    import cv2
+    from src.depth_repair.da3_rife import DA3RIFEDepthRepair
+
+    height, width = rgb[0].shape[:2]
+    anchors = []
+    for frame_index in indices:
+        depth = np.load(
+            reference_dir / f"frame_{frame_index:09d}.npy", allow_pickle=False,
+        ).astype(np.float32)
+        if depth.shape != (height, width):
+            depth = cv2.resize(depth, (width, height), interpolation=cv2.INTER_LINEAR)
+        anchors.append(depth)
+
+    rife = DA3RIFEDepthRepair(sample_stride=1)
+    rife._load_rife()
+    return rife._interpolate(
+        [rgb[i] for i in indices], anchors, indices, len(rgb), height, width,
+    )
+
+
 # ============================== 五、主处理流程 ==============================
 
 def main() -> None:
@@ -176,8 +219,12 @@ def main() -> None:
                    help="transport 的直方图 bin 数，至少 2；默认 256")
     p.add_argument("--quantiles", type=int, default=101,
                    help="quantile 映射请求的分位点数；默认 q101，重复源节点会去重")
-    p.add_argument("--stage", default="validate", choices=["validate", "full", "rife"],
-                   help="validate 只评估；full 迁移完整输入；rife 从迁移后采样帧补齐")
+    p.add_argument(
+        "--stage", default="validate",
+        choices=["validate", "full", "rife", "rife_refine"],
+        help=("validate 只评估；full 迁移完整输入；rife 先映射稀疏源帧再补齐；"
+              "rife_refine 先补齐 Nested 参考再逐帧映射 Metric"),
+    )
     p.add_argument("--allow-unvalidated", action="store_true",
                    help="指标未同时改善时仍允许生成视频")
     p.add_argument("--max-depth-mm", type=float, default=4095)
@@ -185,7 +232,7 @@ def main() -> None:
     p.add_argument("--report-mapping-slope", action="store_true",
                    help="分析映射斜率并保存 mapping_slope.json")
     p.add_argument("--save-preencode-npy", action="store_true",
-                   help="full/rife 时逐帧保存编码前 float32 refine NPY")
+                   help="full/rife/rife_refine 时逐帧保存编码前 float32 refine NPY")
     p.add_argument("--crf", type=int, default=6)
     p.add_argument("--preset", default="medium")
     p.add_argument("--fps", type=int, default=30)
@@ -197,6 +244,8 @@ def main() -> None:
     if args.stage == "rife" and args.mapping_scope == "frame":
         p.error("rife 插值帧没有独立搬运矩阵；逐帧搬运请使用 --stage full，"
                 "旧 RIFE 流程请显式传入 --mapping-scope episode")
+    if args.stage == "rife_refine" and args.mapping_scope != "frame":
+        p.error("rife_refine 会为稠密参考的每一帧独立求映射，必须使用 --mapping-scope frame")
 
     # ---------- 5.2 解析目录并发现匹配相机的源 RGB/深度视频 ----------
     root = Path(args.dataset_dir)
@@ -230,7 +279,17 @@ def main() -> None:
                 metadata = json.loads((ep_out / "sample_indices.json").read_text())
                 indices = [int(i) for i in metadata["sample_frame_indices"]]
                 source = _decode(source_path, args.input_pix_fmt)
-                if args.mapping_scope == "frame":
+                dense_nested = None
+                anchor_ids = None
+                if args.stage == "rife_refine":
+                    anchor_ids = require_frame_references(
+                        ep_out, indices, len(source), full=False)
+                    rgb = _decode(rgb_dir / source_path.name, "rgb24")
+                    if len(rgb) != len(source):
+                        raise RuntimeError(f"RGB/depth frame count mismatch: {source_path}")
+                    dense_nested = _interpolate_nested_reference(rgb, ep_out, anchor_ids)
+                    valid_ids = list(range(len(source)))
+                elif args.mapping_scope == "frame":
                     valid_ids = require_frame_references(
                         ep_out, indices, len(source), full=args.stage == "full")
                 else:
@@ -243,17 +302,25 @@ def main() -> None:
                 if args.mapping_scope == "frame":
                     frame_report_dir = report_path.parent / args.stage
                     timing["frame_timings_csv"] = str((frame_report_dir / "frame_timings.csv").resolve())
-                    transferred, frame_transfers = transfer_frames(
-                        source, ep_out, valid_ids, frame_report_dir, method=args.mapping,
-                        quantiles=args.quantiles, transport_bins=args.transport_bins,
-                        max_depth_mm=args.max_depth_mm)
+                    if dense_nested is None:
+                        transferred, frame_transfers = transfer_frames(
+                            source, ep_out, valid_ids, frame_report_dir, method=args.mapping,
+                            quantiles=args.quantiles, transport_bins=args.transport_bins,
+                            max_depth_mm=args.max_depth_mm)
+                    else:
+                        transferred, frame_transfers = transfer_array_frames(
+                            source, dense_nested, valid_ids, frame_report_dir,
+                            method=args.mapping, quantiles=args.quantiles,
+                            transport_bins=args.transport_bins,
+                            max_depth_mm=args.max_depth_mm)
                     for record in frame_transfers:
                         for key in ("artifact_path", "matrix_path"):
                             if record[key]:
                                 record[key] = f"{args.stage}/{record[key]}"
                     mapping = {"method": args.mapping, "scope": "frame", "frame_count": len(frame_transfers)}
                     timing["frame_timing_summary"] = frame_timing_summary(frame_transfers)
-                nested = [np.load(ep_out / f"frame_{i:09d}.npy") for i in valid_ids]
+                nested = (dense_nested if dense_nested is not None else
+                          [np.load(ep_out / f"frame_{i:09d}.npy") for i in valid_ids])
                 sampled = [source[i] for i in valid_ids]
                 if args.mapping_scope == "episode":
                     pairs = [_valid_pair(x, y) for x, y in zip(sampled, nested)]
@@ -277,6 +344,13 @@ def main() -> None:
                           "transferred": after, "improved": improved, "sample_indices": valid_ids,
                           "frame_metrics": [{"frame_index": i, "baseline": b, "transferred": a}
                                             for i, b, a in zip(valid_ids, frame_before, frame_after)]}
+                if dense_nested is not None:
+                    report["reference"] = {
+                        "kind": "rife_interpolated_nested",
+                        "anchor_indices": anchor_ids,
+                        "dense_frame_count": len(dense_nested),
+                        "note": "RGB RIFE flow warps sparse Nested metric-depth anchors.",
+                    }
                 if frame_transfers:
                     report.update(frame_mappings=frame_transfers,
                                   frame_timings_csv=f"{args.stage}/frame_timings.csv",
@@ -301,7 +375,7 @@ def main() -> None:
                     print(f"Skip unvalidated transfer: {source_path}", file=sys.stderr)
                     continue
                 # ---------- 5.5 full 逐帧映射；rife 从映射后的关键帧补时间轴 ----------
-                if args.stage == "full":
+                if args.stage in ("full", "rife_refine"):
                     output = (transferred if args.mapping_scope == "frame" else
                               [_apply_mapping(f, mapping, args.max_depth_mm) for f in source])
                 else:

@@ -146,8 +146,10 @@ def main() -> None:
                         help="传给 baseline，重新生成已有统计（例如切换采样方式后）")
     parser.add_argument("--save-video", action="store_true",
                         help="保存 Nested 稀疏 baseline 深度视频")
-    parser.add_argument("--refine-stage", choices=["validate", "full", "rife"], default="validate",
-                        help="refine 的具体模式：validate、full 或 rife，默认：validate")
+    parser.add_argument(
+        "--refine-stage", choices=["validate", "full", "rife", "rife_refine"],
+        default="validate",
+        help="refine 的具体模式：validate、full、rife 或 rife_refine，默认：validate")
     parser.add_argument("--mapping", choices=["transport", "quantile", "linear"], default="transport")
     parser.add_argument("--mapping-scope", choices=["frame", "episode"], default="frame")
     parser.add_argument("--transport-bins", type=int, default=256)
@@ -166,9 +168,17 @@ def main() -> None:
         parser.error("--transport-bins 必须至少为 2")
     if args.stage in ("refine", "all") and args.refine_stage == "rife" and args.mapping_scope == "frame":
         parser.error("rife 请使用 --mapping-scope episode；逐帧搬运请使用 --refine-stage full")
+    if (args.stage in ("refine", "all") and args.refine_stage == "rife_refine"
+            and args.mapping_scope != "frame"):
+        parser.error("rife_refine 必须使用 --mapping-scope frame")
     if (args.stage == "all" and args.refine_stage == "full" and args.mapping_scope == "frame"
             and args.sample_count is None and args.sample_stride != 1):
         parser.error("逐帧 full 需要完整参考，请使用 --sample-stride 1 或 --sample-count 0")
+    if args.stage == "all" and args.refine_stage == "rife_refine":
+        if args.sample_count == 1:
+            parser.error("rife_refine 至少需要两个 Nested 锚点")
+        if args.sample_count is None and args.sample_stride != 1:
+            parser.error("rife_refine 需要首尾锚点，请使用 --sample-count 10 或 --sample-stride 1")
     # ===== 路径准备：转为绝对路径，保证子脚本收到稳定路径 =====
     root = Path(args.root).resolve()
     found = projects(root)

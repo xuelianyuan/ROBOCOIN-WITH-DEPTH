@@ -5,6 +5,7 @@ import csv
 import json
 from pathlib import Path
 from time import perf_counter
+from typing import Callable
 
 import numpy as np
 
@@ -74,6 +75,44 @@ def transfer_frames(source: list[np.ndarray], reference_dir: Path, indices: list
     帧总耗时包括参考读取、配对、拟合、应用、NPZ 写盘；不含视频解码、
     评估指标、趋势图、preencode 保存及视频编码，这些仍由 episode_timer 记录。
     """
+    return _transfer_frames(
+        source, indices, report_dir,
+        load_reference=lambda frame_index: np.load(
+            reference_dir / f"frame_{frame_index:09d}.npy", allow_pickle=False),
+        method=method, quantiles=quantiles, transport_bins=transport_bins,
+        max_depth_mm=max_depth_mm,
+    )
+
+
+def transfer_array_frames(
+    source: list[np.ndarray], references: list[np.ndarray], indices: list[int],
+    report_dir: Path, *, method: str, quantiles: int = 101,
+    transport_bins: int = 256, max_depth_mm: float = 4095,
+) -> tuple[list[np.ndarray], list[dict]]:
+    """用内存中的同帧参考逐帧拟合映射。
+
+    该入口用于 RIFE 稠密化后的 Nested 参考。``references[i]`` 必须对应
+    ``source[i]``，不会把插值参考写成假的原始 Nested 结果。
+    """
+    if len(references) != len(source):
+        raise ValueError(
+            f"source/reference frame count mismatch: {len(source)} != {len(references)}")
+    if any(i < 0 or i >= len(source) for i in indices):
+        raise ValueError("frame indices are outside source/reference sequence")
+    return _transfer_frames(
+        source, indices, report_dir,
+        load_reference=lambda frame_index: references[frame_index],
+        method=method, quantiles=quantiles, transport_bins=transport_bins,
+        max_depth_mm=max_depth_mm,
+    )
+
+
+def _transfer_frames(
+    source: list[np.ndarray], indices: list[int], report_dir: Path,
+    *, load_reference: Callable[[int], np.ndarray], method: str,
+    quantiles: int, transport_bins: int, max_depth_mm: float,
+) -> tuple[list[np.ndarray], list[dict]]:
+    """逐帧搬运公共实现；参考既可来自磁盘，也可来自内存。"""
     report_dir.mkdir(parents=True, exist_ok=True)
     artifact_dir = report_dir / "frame_mappings"
     artifact_dir.mkdir(exist_ok=True)
@@ -90,7 +129,7 @@ def transfer_frames(source: list[np.ndarray], reference_dir: Path, indices: list
                 try:
                     # 一、读取同帧参考，并沿用原来的 resize 和有效像素交集规则。
                     phase = perf_counter()
-                    nested = np.load(reference_dir / f"frame_{frame_index:09d}.npy", allow_pickle=False)
+                    nested = load_reference(frame_index)
                     record["reference_load_seconds"] = perf_counter() - phase
                     phase = perf_counter()
                     x, y = _valid_pair(source[frame_index], nested)

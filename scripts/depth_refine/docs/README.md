@@ -25,7 +25,7 @@ RGB 视频 ── build_baseline.py ── 稀疏参考 NPY / 统计 / 可选视
                                     ▼
                          run_refine.py --stage validate
                                     │
-                         run_refine.py --stage full 或 rife
+                         run_refine.py --stage full、rife 或 rife_refine
                                     │
                    plot_comparison.py / inspect_dataset.py
 ```
@@ -106,7 +106,7 @@ EPISODE="episode_000000"
     │       ├── frame_timings.csv
     │       └── frame_timing_summary.json
     ├── videos/chunk-000/observation.images.<camera>_depth_refined/
-    │   └── episode_000000.mp4        # full/rife 通过检查后生成
+    │   └── episode_000000.mp4        # full/rife/rife_refine 通过检查后生成
     └── plots/
         ├── frame_000000000_comparison.png
         └── <camera>/<episode>/mean_curve.png
@@ -192,6 +192,27 @@ python scripts/depth_refine/run_refine.py \
   --camera head --mapping quantile --mapping-scope episode --stage rife
 ```
 
+上面的 `rife` 是兼容旧流程：先用 episode 级映射处理稀疏源帧，再插值输出。
+若要实现“稀疏 Nested → RIFE 稠密参考 → 每帧 Metric 到 Nested 的 OT 映射”，
+先确保 baseline 同时包含首尾锚点（`--sample-count` 天然包含首尾帧），再运行：
+
+```bash
+python scripts/depth_refine/build_baseline.py \
+  --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
+  --camera head --sample-count 10 --force
+
+python scripts/depth_refine/run_refine.py \
+  --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
+  --camera head --mapping transport --mapping-scope frame --stage rife_refine \
+  --report-mapping-slope --save-preencode-npy
+```
+
+`rife_refine` 在锚点 RGB 上估计 RIFE 双向流，并 warp 对应的 Nested 毫米深度，
+得到与原视频等长的参考序列；随后为每个时刻独立拟合
+`Metric_t -> Nested-RIFE_t` 的一维直方图最优传输并应用到原始 Metric 帧。
+它保留原始 Metric 的空间排列，目标是匹配每帧参考分布。该模式不把深度图
+当 RGB 直接插帧，也不把 RIFE 参考写回 baseline 冒充真实 Nested 推理结果。
+
 示例将 RIFE 结果放在独立目录，便于与 full 比较。同一路径运行不同阶段/映射会重写报告和同名结果；每次运行都会重新拟合，不会直接加载上次验证报告中的映射。
 
 | 参数 | 默认值 | 说明 |
@@ -207,12 +228,12 @@ python scripts/depth_refine/run_refine.py \
 | `--mapping-scope` | `frame` | frame 每帧独立；episode 沿用全局映射 |
 | `--transport-bins` | `256` | transport 直方图离散 bin 数，至少 2；只保存非空 bin |
 | `--quantiles` | `101` | quantile 拟合请求的分位点数，实际至少 3 个；重复源节点会去重 |
-| `--stage` | `validate` | validate 搬运并评估已有参考帧；逐帧 full 要求完整同帧参考；rife 仅支持 episode scope |
+| `--stage` | `validate` | validate 搬运并评估已有参考帧；full 要求完整同帧参考；rife 为旧的先映射后插值；rife_refine 为先稠密参考后逐帧映射 |
 | `--allow-unvalidated` | 关闭 | 未满足指标改善条件时仍生成视频 |
 | `--max-depth-mm` | `4095` | 映射输出上限；编码器仍会裁剪到 4095 |
 | `--plot-trend` | 关闭 | 保存逐采样帧均值及 Wasserstein 趋势图 |
 | `--report-mapping-slope` | 关闭 | 保存映射斜率摘要及最陡区间，并写入验证报告 |
-| `--save-preencode-npy` | 关闭 | full/rife 逐帧保存编码前 float32 深度 NPY |
+| `--save-preencode-npy` | 关闭 | full/rife/rife_refine 逐帧保存编码前 float32 深度 NPY |
 | `--fps` / `--crf` / `--preset` | `30` / `6` / `medium` | 输出视频编码参数 |
 
 ### 如何阅读验证报告
@@ -260,7 +281,7 @@ with np.load("frame_000000000.npz", allow_pickle=False) as plan:
 | `p10_mm` / `p50_mm` / `p90_mm` | 当前结果的深度分位数 |
 | `valid_pixels` | 参与统计的有效配对像素数 |
 
-仅当 MAE、RMSE 和 Wasserstein **全部严格降低**时，`improved` 才为 `true`；否则 full/rife 默认跳过视频输出，并打印 `Skip unvalidated transfer`。报告仍会保留。验证使用拟合时的同一批采样帧，并非独立测试集，也不直接衡量时间一致性。
+仅当 MAE、RMSE 和 Wasserstein **全部严格降低**时，`improved` 才为 `true`；否则 full/rife/rife_refine 默认跳过视频输出，并打印 `Skip unvalidated transfer`。报告仍会保留。验证使用拟合时的同一批帧，并非独立测试集，也不直接衡量时间一致性；rife_refine 的非锚点目标还是插值参考，不是真实 Nested 推理值。
 
 找不到参考索引/NPY 或没有有效像素的 episode 会被跳过。RIFE 模式额外要求 RGB 与原深度总帧数相同。
 
@@ -299,7 +320,7 @@ python scripts/depth_refine/run_batch.py \
 | `--sample-count` | 未指定 | 传给 baseline，改用均匀定量采样 |
 | `--force` | 关闭 | 传给 baseline，重新生成已有统计 |
 | `--save-video` | 关闭 | 传给 baseline，保存稀疏视频 |
-| `--refine-stage` | `validate` | 传给 refine：`validate`、`full`、`rife` |
+| `--refine-stage` | `validate` | 传给 refine：`validate`、`full`、`rife`、`rife_refine` |
 | `--mapping` / `--mapping-scope` / `--transport-bins` | `transport` / `frame` / `256` | 传给 refine；逐帧 full 的 baseline 必须用 `--sample-stride 1` 或 `--sample-count 0` |
 | `--plot-mean-curve` | 关闭 | refine 后根据报告绘制原始/参考/迁移后均值曲线 |
 | `--dry-run` | 关闭 | 只打印项目、相机和阶段，不执行子脚本或绘图 |
@@ -415,7 +436,7 @@ python scripts/depth_refine/inspect_dataset.py \
 
 ### 7.3 将 Original / Baseline / Refine 导出为逐帧 PCD
 
-此模式不需要 `--repo-id`，完成导出后退出。先用 baseline 的 `--save-video` 生成稀疏视频及 manifest，再用 full/rife 生成完整 refined 视频：
+此模式不需要 `--repo-id`，完成导出后退出。先用 baseline 的 `--save-video` 生成稀疏视频及 manifest，再用 full/rife/rife_refine 生成完整 refined 视频：
 
 ```bash
 python scripts/depth_refine/inspect_dataset.py \
@@ -479,7 +500,7 @@ python scripts/depth_refine/inspect_dataset.py --help
 
 ## 9. 逐 episode、逐视角耗时
 
-baseline/refine 自动将最近一次处理的墙钟耗时写入 `depth_results/timings/`，包含每个视角的独立记录，区分 Nested/Metric 和 refine 的 validate/full/rife 阶段。运行 `python scripts/depth_refine/summarize_timings.py --result-root "$RESULT_ROOT"` 导出单视角明细 `per_view.csv`、三视角合计 `per_episode.csv` 及逐帧明细 `per_frame.csv`。缺失或未完成的视角不会按零秒计入完整合计。
+baseline/refine 自动将最近一次处理的墙钟耗时写入 `depth_results/timings/`，包含每个视角的独立记录，区分 Nested/Metric 和 refine 的 validate/full/rife/rife_refine 阶段。运行 `python scripts/depth_refine/summarize_timings.py --result-root "$RESULT_ROOT"` 导出单视角明细 `per_view.csv`、三视角合计 `per_episode.csv` 及逐帧明细 `per_frame.csv`。缺失或未完成的视角不会按零秒计入完整合计。
 
 逐帧 CSV 的 `fit_seconds` 是直方图构建和搬运矩阵求解耗时，`apply_seconds` 是应用映射耗时，`total_seconds` 包含参考读取、配对、拟合、应用和矩阵写盘。视频解码、评估、绘图、preencode 保存及编码计入 episode 总耗时，不分摊到各帧；旧结果无法反推真实逐帧耗时。
 

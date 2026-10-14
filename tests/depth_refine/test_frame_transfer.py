@@ -82,6 +82,24 @@ def test_frames_have_independent_matrices_and_actual_phase_timings(tmp_path, mon
     assert len(aggregated) == 2 and aggregated[1]["stage"] == "refine_full"
 
 
+def test_in_memory_dense_references_have_independent_mappings(tmp_path):
+    source = [np.full((2, 2), 10), np.full((2, 2), 20)]
+    references = [np.full((2, 2), 100), np.full((2, 2), 300)]
+    outputs, records = frame_transfer.transfer_array_frames(
+        source, references, [0, 1], tmp_path / "reports", method="transport")
+    np.testing.assert_array_equal(outputs[0], np.full((2, 2), 100))
+    np.testing.assert_array_equal(outputs[1], np.full((2, 2), 300))
+    assert len(records) == 2
+    assert all((tmp_path / "reports" / r["matrix_path"]).is_file() for r in records)
+
+
+def test_in_memory_dense_references_require_matching_frame_count(tmp_path):
+    with pytest.raises(ValueError, match="frame count mismatch"):
+        frame_transfer.transfer_array_frames(
+            [np.ones((1, 1))] * 2, [np.ones((1, 1))], [0, 1],
+            tmp_path / "reports", method="transport")
+
+
 def test_no_valid_pairs_preserves_failed_frame_timing(tmp_path):
     np.save(tmp_path / "frame_000000000.npy", np.ones((1, 2)))
     with pytest.raises(ValueError, match="frame 0: no valid"):
@@ -186,3 +204,50 @@ def test_cli_frame_rife_is_rejected_before_loading_models(monkeypatch):
     with pytest.raises(SystemExit) as error:
         run_refine.main()
     assert error.value.code == 2
+
+
+def test_cli_rife_refine_interpolates_reference_then_maps_every_frame(tmp_path, monkeypatch):
+    rgb_path = tmp_path / "videos/chunk-000/observation.images.head_rgb/episode_000000.mp4"
+    depth_path = rgb_path.parent.parent / "observation.images.head_depth/episode_000000.mp4"
+    rgb_path.parent.mkdir(parents=True)
+    depth_path.parent.mkdir()
+    rgb_path.touch()
+    depth_path.touch()
+    reference_dir = tmp_path / "depth_results/baseline/statistics/head/episode_000000"
+    reference_dir.mkdir(parents=True)
+    (reference_dir / "sample_indices.json").write_text(
+        json.dumps({"sample_frame_indices": [0, 2]}))
+    np.save(reference_dir / "frame_000000000.npy", np.full((2, 2), 100))
+    np.save(reference_dir / "frame_000000002.npy", np.full((2, 2), 300))
+
+    source = [np.full((2, 2), value) for value in (10, 20, 30)]
+    rgb = [np.zeros((2, 2, 3), dtype=np.uint8) for _ in range(3)]
+    monkeypatch.setattr(
+        run_refine, "_decode", lambda path, pix_fmt: rgb if pix_fmt == "rgb24" else source)
+    monkeypatch.setattr(
+        run_refine, "_interpolate_nested_reference",
+        lambda frames, path, indices: [np.full((2, 2), value) for value in (100, 200, 300)])
+    encoded = []
+    monkeypatch.setattr(
+        run_refine.DepthVideoEncoder, "encode_from_arrays",
+        lambda self, arrays, path: encoded.append(arrays) or 0)
+    monkeypatch.setattr(
+        "sys.argv", ["run_refine.py", "--dataset-dir", str(tmp_path),
+                     "--camera", "head", "--stage", "rife_refine"])
+
+    run_refine.main()
+
+    assert len(encoded) == 1
+    np.testing.assert_array_equal(
+        encoded[0], np.array([np.full((2, 2), value) for value in (100, 200, 300)]))
+    report_dir = tmp_path / "depth_results/refine/reports/head/episode_000000"
+    report = json.loads((report_dir / "refine_parameters.json").read_text())
+    assert report["reference"]["kind"] == "rife_interpolated_nested"
+    assert report["reference"]["anchor_indices"] == [0, 2]
+    assert len(report["frame_mappings"]) == 3
+
+
+def test_rife_refine_requires_first_and_last_nested_anchors(tmp_path):
+    rgb = [np.zeros((2, 2, 3), dtype=np.uint8) for _ in range(3)]
+    with pytest.raises(ValueError, match="frame 0 and the final frame"):
+        run_refine._interpolate_nested_reference(rgb, tmp_path, [0, 1])

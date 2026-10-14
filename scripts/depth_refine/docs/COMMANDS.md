@@ -83,7 +83,19 @@ python scripts/depth_refine/run_refine.py \
   --camera "$CAMERA" --mapping quantile --mapping-scope episode --stage rife
 ```
 
-full/rife 默认仅在 MAE、RMSE、Wasserstein 全部改善时生成视频。RIFE 需额外模型依赖；后续命令中的 `AFTER` 仍指向 full 结果。
+```bash
+# 手绘方案：10 个首尾覆盖的 Nested 锚点 → RIFE 稠密参考 → 每帧 OT refine
+python scripts/depth_refine/build_baseline.py \
+  --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
+  --camera "$CAMERA" --sample-count 10 --force
+
+python scripts/depth_refine/run_refine.py \
+  --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
+  --camera "$CAMERA" --mapping transport --mapping-scope frame \
+  --stage rife_refine --report-mapping-slope --save-preencode-npy
+```
+
+full/rife/rife_refine 默认仅在 MAE、RMSE、Wasserstein 全部改善时生成视频。RIFE 需额外模型依赖；后续命令中的 `AFTER` 指向最近写入默认 refined 路径的结果。
 
 默认逐帧处理：每帧独立拟合并保存矩阵和计时，full 缺少任何同帧参考都会报错。validate 只处理已有参考帧。旧的全局分位数流程可显式使用 `--mapping quantile --mapping-scope episode`。
 
@@ -194,10 +206,10 @@ python scripts/depth_refine/summarize_timings.py \
 - `timings/per_view.csv`：每条 episode × 单视角 × 阶段的秒数、状态和帧数。
 - `timings/per_episode.csv`：每条 episode 按阶段汇总所选视角；缺失、跳过或失败时合计留空，并列出缺失视角。
 - `timings/per_frame.csv`：各相机、episode、阶段的逐帧搬运耗时明细；只汇总实际逐帧处理的记录。
-- `timings/<stage>/<chunk>/<camera>/<episode>.json`：保留该阶段最近一次实际尝试。阶段分别为 `da3_nested`（或 `da3`）、`refine_validate`、`refine_full`、`refine_rife`，不会混算。
+- `timings/<stage>/<chunk>/<camera>/<episode>.json`：保留该阶段最近一次实际尝试。阶段分别为 `da3_nested`（或 `da3`）、`refine_validate`、`refine_full`、`refine_rife`、`refine_rife_refine`，不会混算。
 
 耗时为单视频处理的墙钟时间，包括读取/解码、计算、统计、结果写入及可选编码/绘图；不包括进程启动和 episode 外的初始化。模型按需加载，因此首次推理的模型加载开销计入首条 episode。三视角合计为各视角耗时之和，不代表并行处理时的实际等待时间。
 
 逐帧明细中的 `fit_seconds` 是直方图和矩阵求解，`apply_seconds` 是映射应用，`total_seconds` 加上参考读取、配对和 NPZ 写盘。视频解码、指标计算、绘图、preencode 保存及视频编码计入 episode 总耗时，不分摊到各帧。
 
-旧结果没有计时数据，不能用文件时间戳准确还原。上述 `--force` 会重新生成 baseline 并覆盖其结果和计时；不加时已有 baseline 直接跳过、保留原计时。refine 每次重新处理并更新对应阶段计时。验证未通过而跳过视频的 full/rife 记录标为 `skipped`，不算完整 refine。汇总命令每次覆盖三份 CSV，原始 JSON 保留。
+旧结果没有计时数据，不能用文件时间戳准确还原。上述 `--force` 会重新生成 baseline 并覆盖其结果和计时；不加时已有 baseline 直接跳过、保留原计时。refine 每次重新处理并更新对应阶段计时。验证未通过而跳过视频的 full/rife/rife_refine 记录标为 `skipped`，不算完整 refine。汇总命令每次覆盖三份 CSV，原始 JSON 保留。
