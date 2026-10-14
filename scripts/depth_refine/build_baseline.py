@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """RoboCOIN 深度分析工具。
 
-读取 LeRobot 数据集中的 RGB 相机视频，对每个 episode 均匀采样少量帧，
+读取 LeRobot 数据集中的 RGB 相机视频，默认对每个 episode 每 5 帧采样一次，
 使用 DA3-Nested（或 DA3 Metric）估计深度，并保存：
 
 * 采样深度帧（uint16 PNG/NPY，单位为毫米）；
@@ -14,7 +14,7 @@
 用法示例::
 
     python scripts/depth_refine/build_baseline.py --dataset-dir data/lerobot/my_dataset \\
-        --camera head --sample-count 20 --save-video
+        --camera head --sample-stride 5 --save-video
 """
 
 from __future__ import annotations
@@ -28,21 +28,25 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.depth_refine.timing import episode_timer
 from src.depth_encoder import DepthVideoEncoder
 from src.depth_repair import create_depth_repair
 
 
-def _sample_indices(n: int, count: int) -> list[int]:
-    """生成近似等间隔的采样帧索引。
+def _sample_indices(n: int, count: int | None = None, *, stride: int = 5) -> list[int]:
+    """默认按固定步长取源帧；显式传入 count 时沿用均匀定量采样。
 
-    ``linspace`` 能保证采样覆盖视频首尾；当请求数量超过总帧数时，
-    直接返回全部索引，避免重复推理同一帧。
+    步长模式只取 ``0, stride, 2 * stride, ... < n``，不额外补尾帧。
+    定量模式使用 ``linspace``；数量非正或超过总帧数时返回全部帧。
     """
+    if count is None and stride <= 0:
+        raise ValueError("sample stride must be positive")
     if n <= 0:
         return []
+    if count is None:
+        return list(range(0, n, stride))
     if count <= 0 or count >= n:
         return list(range(n))
     return sorted(set(np.linspace(0, n - 1, count, dtype=np.int64).tolist()))
@@ -120,7 +124,11 @@ def main() -> None:
     p = argparse.ArgumentParser(description="DA3-Nested 稀疏深度分析")
     p.add_argument("--dataset-dir", required=True)
     p.add_argument("--camera", default="all", help="head/right/left/chest/all")
-    p.add_argument("--sample-count", type=int, default=20)
+    sampling = p.add_mutually_exclusive_group()
+    sampling.add_argument("--sample-stride", type=int, default=5,
+                          help="源视频采样步长，必须大于 0，默认：每 5 帧一次")
+    sampling.add_argument("--sample-count", type=int, default=None,
+                          help="改用均匀定量采样；非正数表示全部帧，与 --sample-stride 互斥")
     p.add_argument("--strategy", default="da3_nested", choices=["da3_nested", "da3"])
     p.add_argument("--output-dir", default=None)
     p.add_argument("--result-root", default=None,
@@ -136,6 +144,13 @@ def main() -> None:
     p.add_argument("--device", default="auto")
     p.add_argument("--force", action="store_true", help="重新处理已有 statistics.json")
     args = p.parse_args()
+    if args.sample_count is None and args.sample_stride <= 0:
+        p.error("--sample-stride 必须大于 0")
+    sampling_config = {
+        "sampling_mode": "stride" if args.sample_count is None else "count",
+        "sample_stride": args.sample_stride if args.sample_count is None else None,
+        "requested_sample_count": args.sample_count,
+    }
 
     # 数据集通常包含 videos/、depth_statistics/ 等目录；所有相对路径
     # 均从用户传入的数据集根目录解析，便于把结果写入另一位置。
@@ -181,14 +196,13 @@ def main() -> None:
                 continue
             with episode_timer(result_root, stage=args.strategy, camera=camera_name,
                                source=video_path, model_id=model_id,
-                               sample_count=args.sample_count) as timing:
-                # 先完整解码 RGB，后续仅选取少量帧送入深度修复器。
+                               sample_count=args.sample_count, **sampling_config) as timing:
+                # 先完整解码 RGB，后续仅将采样帧送入深度修复器。
                 rgb = _decode_rgb_video(video_path)
                 if not rgb:
                     print(f"Skipping undecodable video: {video_path}", file=sys.stderr)
                     continue
-                # 等间隔采样并始终保留首尾帧，保证稀疏结果覆盖完整时间范围。
-                indices = _sample_indices(len(rgb), args.sample_count)
+                indices = _sample_indices(len(rgb), args.sample_count, stride=args.sample_stride)
                 sampled_rgb = [rgb[i] for i in indices]
                 # 只把采样后的 RGB 送入 Nested；这里不会生成伪造的完整时间轴。
                 # 第二个参数保留为空，表示没有额外的真实深度约束；返回值
@@ -203,6 +217,7 @@ def main() -> None:
                 with open(ep_out / "sample_indices.json", "w") as f:
                     json.dump({"source_video": str(video_path), "source_num_frames": len(rgb),
                                "sample_count": len(indices), "fps": args.fps,
+                               **sampling_config,
                                "sample_frame_indices": indices}, f, indent=2)
                 # 可选地把稀疏结果编码成灰度深度视频；视频帧数仍等于采样数。
                 if args.save_video and nested:
@@ -215,6 +230,7 @@ def main() -> None:
                         "sparse_video": str(sparse_dir / video_path.name),
                         "source_num_frames": len(rgb), "sparse_num_frames": len(nested),
                         "source_fps": args.fps, "sparse_fps": args.fps,
+                        **sampling_config,
                         "sample_frame_indices": indices,
                     }, indent=2))
                 # 写入汇总标记，记录模型、采样位置及全局/逐帧统计，支持断点续跑。
@@ -222,6 +238,7 @@ def main() -> None:
                     json.dump({"camera": camera_name, "episode": episode,
                                "strategy": args.strategy, "model_id": model_id,
                                "source_num_frames": len(rgb), "sample_indices": indices,
+                               **sampling_config,
                                "stats": _stats(nested),
                                "sampled_frames": [
                                    {"frame_index": int(i), "npy": f"frame_{i:09d}.npy",

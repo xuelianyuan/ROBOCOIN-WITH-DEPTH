@@ -52,10 +52,10 @@ use_camera right_wrist  # 右腕：cam_right_wrist
 ```bash
 python scripts/depth_refine/build_baseline.py \
   --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
-  --camera "$CAMERA" --sample-count 60 --save-video
+  --camera "$CAMERA" --sample-stride 5 --save-video
 ```
 
-已有统计、需要重新生成或补存视频时，追加 `--force`。
+默认按源帧 `0, 5, 10, ...` 采样，不额外补尾帧。已有统计、切换采样配置或补存视频时，追加 `--force`。需要旧的均匀定量采样时，将 `--sample-stride 5` 换成 `--sample-count 60`，两者不能同时指定。
 
 ## 2. run_refine.py：验证 / 生成完整结果
 
@@ -100,7 +100,7 @@ python scripts/depth_refine/run_batch.py \
 # 批量生成参考并验证
 python scripts/depth_refine/run_batch.py \
   --root data/lerobot --cameras "${BATCH_CAMERAS[@]}" \
-  --stage all --sample-count 20 --save-video \
+  --stage all --sample-stride 5 --save-video \
   --refine-stage validate --plot-mean-curve
 
 # 基于已有参考生成完整结果
@@ -113,7 +113,7 @@ python scripts/depth_refine/run_batch.py \
   --root data/lerobot --cameras "${BATCH_CAMERAS[@]}" --stage plot
 ```
 
-仅处理当前项目时，将 `--root data/lerobot` 换成 `--root "$DATASET"`。
+仅处理当前项目时，将 `--root data/lerobot` 换成 `--root "$DATASET"`。切换采样配置后追加 `--force` 重新生成已有 baseline。
 
 ## 4. plot_comparison.py：三路对比图
 
@@ -168,7 +168,7 @@ PCD 导出要求数据路径含 `<dataset>_depth_preview/<task>`，且 baseline 
 for VIEW in cam_front_head cam_left_wrist cam_right_wrist; do
   python scripts/depth_refine/build_baseline.py \
     --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
-    --camera "$VIEW" --sample-count 20 --save-video --force || break
+    --camera "$VIEW" --sample-stride 5 --save-video --force || break
   python scripts/depth_refine/run_refine.py \
     --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
     --camera "$VIEW" --mapping quantile --stage full || break

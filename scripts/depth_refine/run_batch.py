@@ -137,8 +137,13 @@ def main() -> None:
                         help="要处理的视角：head、left_wrist、right_wrist、chest")
     parser.add_argument("--stage", choices=["baseline", "refine", "all", "plot"], default="baseline",
                         help="执行阶段：baseline、refine、all 或 plot（仅绘图），默认：baseline")
-    parser.add_argument("--sample-count", type=int, default=20,
-                        help="每个视频均匀采样的帧数，默认：20")
+    sampling = parser.add_mutually_exclusive_group()
+    sampling.add_argument("--sample-stride", type=int, default=5,
+                          help="源视频采样步长，必须大于 0，默认：每 5 帧一次")
+    sampling.add_argument("--sample-count", type=int, default=None,
+                          help="改用均匀定量采样；非正数表示全部帧，与 --sample-stride 互斥")
+    parser.add_argument("--force", action="store_true",
+                        help="传给 baseline，重新生成已有统计（例如切换采样方式后）")
     parser.add_argument("--save-video", action="store_true",
                         help="保存 Nested 稀疏 baseline 深度视频")
     parser.add_argument("--refine-stage", choices=["validate", "full", "rife"], default="validate",
@@ -150,6 +155,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="只打印将处理的项目和视角，不实际运行子脚本")
     args = parser.parse_args()
+    if args.sample_count is None and args.sample_stride <= 0:
+        parser.error("--sample-stride 必须大于 0")
     # ===== 路径准备：转为绝对路径，保证子脚本收到稳定路径 =====
     root = Path(args.root).resolve()
     found = projects(root)
@@ -170,8 +177,14 @@ def main() -> None:
                 continue
             # ===== Baseline 阶段：运行深度分析并输出统计结果 =====
             cmd = [sys.executable, "scripts/depth_refine/build_baseline.py", "--dataset-dir", str(project),
-                   "--camera", CAMERA_KEYS[camera], "--sample-count", str(args.sample_count),
+                   "--camera", CAMERA_KEYS[camera],
                    "--result-root", str(result_root)]
+            if args.sample_count is None:
+                cmd.extend(["--sample-stride", str(args.sample_stride)])
+            else:
+                cmd.extend(["--sample-count", str(args.sample_count)])
+            if args.force:
+                cmd.append("--force")
             if args.save_video:
                 cmd.append("--save-video")
             if args.stage in ("baseline", "all"):

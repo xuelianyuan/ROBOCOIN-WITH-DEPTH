@@ -8,7 +8,7 @@
 
 | 脚本 | 作用 | 输入 | 主要输出 |
 |---|---|---|---|
-| [build_baseline.py](../build_baseline.py) | 均匀采样 RGB，使用 DA3 Nested（或 Metric）生成参考深度 | 单个数据集的 RGB 视频 | PNG/NPY 采样帧、统计 JSON、可选稀疏深度视频 |
+| [build_baseline.py](../build_baseline.py) | 默认每 5 帧采样 RGB，使用 DA3 Nested（或 Metric）生成参考深度 | 单个数据集的 RGB 视频 | PNG/NPY 采样帧、统计 JSON、可选稀疏深度视频 |
 | [run_refine.py](../run_refine.py) | 拟合原深度到参考深度的映射，验证并生成完整结果 | 原始深度视频、baseline 采样帧 | 指标报告、可选趋势图和 refined 视频 |
 | [run_batch.py](../run_batch.py) | 遍历多个项目、多个相机，依次调用 baseline/refine 或绘制均值曲线 | 包含多个数据集的根目录 | 各项目独立的 `depth_results/` |
 | [plot_comparison.py](../plot_comparison.py) | 绘制原始、修正后和 Nested 的 3×3 对比图 | 两个完整深度视频、对应 Nested 采样帧 | 点云、深度图、直方图组成的 PNG |
@@ -112,12 +112,14 @@ EPISODE="episode_000000"
 
 ## 3. build_baseline.py：生成稀疏参考
 
-脚本发现 RGB 视频后，完整解码每个视频，再抽取近似等间隔帧执行 DA3 推理。通常采样覆盖首尾；`--sample-count 1` 只采首帧，设为非正数或不小于总帧数则使用全部帧。
+脚本发现 RGB 视频后，完整解码每个视频，默认按步长 5 抽取源帧 `0, 5, 10, ...` 执行 DA3 推理。只取小于总帧数的索引，不额外补尾帧。可用 `--sample-stride` 修改步长，必须大于 0。
+
+显式指定 `--sample-count` 时沿用均匀定量采样，通常覆盖首尾；`--sample-count 1` 只采首帧，设为非正数或不小于总帧数则使用全部帧。两个采样参数互斥。
 
 ```bash
 python scripts/depth_refine/build_baseline.py \
   --dataset-dir "$DATASET" --camera head \
-  --sample-count 20 --strategy da3_nested \
+  --sample-stride 5 --strategy da3_nested \
   --save-video --result-root "$RESULT_ROOT"
 ```
 
@@ -125,7 +127,8 @@ python scripts/depth_refine/build_baseline.py \
 |---|---|---|
 | `--dataset-dir` | 必填 | 单个数据集根目录 |
 | `--camera` | `all` | RGB 相机目录的匹配关键词；`all` 处理所有发现的 RGB 目录 |
-| `--sample-count` | `20` | 每个视频采样数量 |
+| `--sample-stride` | `5` | 源帧采样步长，必须大于 0；与 `--sample-count` 互斥 |
+| `--sample-count` | 未指定 | 改用均匀定量采样，非正数表示全部帧 |
 | `--strategy` | `da3_nested` | `da3_nested` 或 `da3`；后者在未修改默认模型时切换到 `depth-anything/DA3METRIC-LARGE` |
 | `--da3-model` | `depth-anything/DA3NESTED-GIANT-LARGE-1.1` | 模型 ID |
 | `--da3-process-res` | `504` | DA3 处理分辨率 |
@@ -137,11 +140,11 @@ python scripts/depth_refine/build_baseline.py \
 | `--fps` / `--crf` / `--preset` | `30` / `6` / `medium` | 视频帧率和编码参数 |
 | `--force` | 关闭 | 即使已有 `statistics.json` 也重新处理 |
 
-`sample_indices.json` 记录源视频、源帧数和 `sample_frame_indices`。例如采样索引为 `[0, 10, 20]` 时，稀疏视频的第 1 帧对应源视频第 10 帧，不是源视频第 1 帧。NPY/PNG 文件名直接使用源帧号，补齐为 9 位。
+`sample_indices.json` 记录源视频、源帧数、采样方式、步长和 `sample_frame_indices`。例如采样索引为 `[0, 5, 10]` 时，稀疏视频的第 1 帧对应源视频第 5 帧，不是源视频第 1 帧。NPY/PNG 文件名直接使用源帧号，补齐为 9 位。
 
 `statistics.json` 记录模型、采样位置、全局/逐帧有效深度统计和分位数；统计仅包含有限且大于零的深度。`manifest.json` 记录稀疏视频与源帧的对应关系，供 PCD 导出使用。
 
-已有 `statistics.json` 时会跳过整个 episode。因此第一次未加 `--save-video`，后来需要补视频时，应同时加 `--force --save-video`。
+已有 `statistics.json` 时会跳过整个 episode。切换采样方式或步长后必须加 `--force` 重新生成。第一次未加 `--save-video`，后来需要补视频时，应同时加 `--force --save-video`。
 
 **自定义位置优先使用 `--result-root`。** 当前 `--output-dir` 不仅改变统计位置，还会让稀疏视频写到源 `videos/chunk-*` 旁的 `_depth_nested_sparse` 目录，且不符合 PCD 导出默认查找 manifest 的结构。即使策略为 `da3`，输出目录后缀仍叫 `_depth_nested_sparse`。
 
@@ -244,7 +247,7 @@ python scripts/depth_refine/run_batch.py \
 # 生成参考并验证，保存稀疏视频及均值曲线
 python scripts/depth_refine/run_batch.py \
   --root data/lerobot --cameras head left_wrist right_wrist \
-  --stage all --sample-count 20 --save-video \
+  --stage all --sample-stride 5 --save-video \
   --refine-stage validate --plot-mean-curve
 
 # 基于已有参考生成完整结果
@@ -262,14 +265,16 @@ python scripts/depth_refine/run_batch.py \
 | `--root` | `data/lerobot` | 扫描根目录，也可指向单个项目 |
 | `--cameras` | `head left_wrist right_wrist chest` | 空格分隔，仅接受这四个选项；缺失相机跳过 |
 | `--stage` | `baseline` | `baseline`、`refine`、`all`、`plot` |
-| `--sample-count` | `20` | 传给 baseline |
+| `--sample-stride` | `5` | 传给 baseline；与 `--sample-count` 互斥 |
+| `--sample-count` | 未指定 | 传给 baseline，改用均匀定量采样 |
+| `--force` | 关闭 | 传给 baseline，重新生成已有统计 |
 | `--save-video` | 关闭 | 传给 baseline，保存稀疏视频 |
 | `--refine-stage` | `validate` | 传给 refine：`validate`、`full`、`rife` |
 | `--plot-mean-curve` | 关闭 | refine 后根据报告绘制原始/参考/迁移后均值曲线 |
 | `--dry-run` | 关闭 | 只打印项目、相机和阶段，不执行子脚本或绘图 |
 | `--replace-depth-video` | 关闭 | 存在替换实现问题，见下文 |
 
-当前代码**支持 chest，且默认包含 chest**，与旧 README 中“不参与批处理”的说法不同。结果固定为各项目的 `depth_results/`；批处理器没有暴露 `--mapping`、`--force`、模型、设备、帧率、自定义结果路径或 `--allow-unvalidated`，需要这些参数时直接运行对应单项目脚本。
+当前代码**支持 chest，且默认包含 chest**，与旧 README 中“不参与批处理”的说法不同。结果固定为各项目的 `depth_results/`；切换采样配置后用 `--force` 重新生成 baseline。批处理器没有暴露 `--mapping`、模型、设备、帧率、自定义结果路径或 `--allow-unvalidated`，需要这些参数时直接运行对应单项目脚本。
 
 `--replace-depth-video` 的帮助文本表示替换原数据集深度，但当前函数实际从生成视频所在的结果 chunk 查找目标，没有使用 `project/videos` 定位，可能只是把结果复制回自身。因此不要依赖此选项完成原深度替换；本文示例均保留独立输出。validate 本身不生成可替换视频。
 
