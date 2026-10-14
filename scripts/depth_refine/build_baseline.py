@@ -125,7 +125,7 @@ def main() -> None:
     p.add_argument("--dataset-dir", required=True)
     p.add_argument("--camera", default="all", help="head/right/left/chest/all")
     sampling = p.add_mutually_exclusive_group()
-    sampling.add_argument("--sample-stride", type=int, default=5,
+    sampling.add_argument("--sample-stride", type=int, default=None,
                           help="源视频采样步长，必须大于 0，默认：每 5 帧一次")
     sampling.add_argument("--sample-count", type=int, default=None,
                           help="改用均匀定量采样；非正数表示全部帧，与 --sample-stride 互斥")
@@ -144,6 +144,9 @@ def main() -> None:
     p.add_argument("--device", default="auto")
     p.add_argument("--force", action="store_true", help="重新处理已有 statistics.json")
     args = p.parse_args()
+    # 用 None 区分未传参和显式 --sample-stride 5，确保与 --sample-count 互斥。
+    if args.sample_stride is None:
+        args.sample_stride = 5
     if args.sample_count is None and args.sample_stride <= 0:
         p.error("--sample-stride 必须大于 0")
     sampling_config = {

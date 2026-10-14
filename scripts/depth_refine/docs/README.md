@@ -100,7 +100,11 @@ EPISODE="episode_000000"
 └── refine/
     ├── reports/<camera>/<episode>/
     │   ├── refine_parameters.json
-    │   └── refine_trend.png          # 仅 --plot-trend 时生成
+    │   ├── refine_trend.png          # 仅 --plot-trend 时生成
+    │   └── <validate|full>/          # 逐帧模式，各阶段独立保存
+    │       ├── frame_mappings/frame_000000000.npz
+    │       ├── frame_timings.csv
+    │       └── frame_timing_summary.json
     ├── videos/chunk-000/observation.images.<camera>_depth_refined/
     │   └── episode_000000.mp4        # full/rife 通过检查后生成
     └── plots/
@@ -150,10 +154,11 @@ python scripts/depth_refine/build_baseline.py \
 
 ## 4. run_refine.py：验证和迁移深度分布
 
-对每个 episode，将原深度与同一源帧号的参考 NPY 配对，汇总有效像素后拟合一套映射。参考尺寸不同时，验证前会将参考线性插值到原深度尺寸。
+默认 `--mapping-scope frame --mapping transport`：每个源帧只与同帧参考 NPY 配对，独立求解直方图最优传输矩阵并应用映射。参考尺寸不同时，先将参考线性插值到原深度尺寸；拟合使用两者有限且大于零的像素交集。`--mapping-scope episode` 可恢复合并所有采样像素、各帧共用一套映射的旧行为。
 
 | 映射 | 作用 |
 |---|---|
+| `transport` | 一维直方图单调最优传输，保存源 bin → 目标 bin 的概率质量矩阵；用每行目标深度的加权均值构造映射 |
 | `quantile` | 分别计算源/参考分位数，以插值完成一维分布匹配；超出拟合范围的值取端点值 |
 | `linear` | 拟合 `target ≈ a × source + b`，拟合时剔除源深度低于 P1、高于 P99 的像素 |
 
@@ -165,12 +170,17 @@ python scripts/depth_refine/build_baseline.py \
 # 只生成报告及趋势图
 python scripts/depth_refine/run_refine.py \
   --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
-  --camera head --mapping quantile --stage validate --plot-trend
+  --camera head --mapping transport --mapping-scope frame --stage validate --plot-trend
 
-# 将同一 episode 的映射应用于原深度的每一帧
+# 先生成每一帧的 Nested 参考；已有稀疏统计时用 --force 重新生成
+python scripts/depth_refine/build_baseline.py \
+  --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
+  --camera head --sample-stride 1 --force
+
+# 每一帧独立搬运、保存矩阵和计时，生成完整视频
 python scripts/depth_refine/run_refine.py \
   --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
-  --camera head --mapping quantile --stage full
+  --camera head --mapping transport --mapping-scope frame --stage full
 ```
 
 如需使用 RIFE，从迁移后的稀疏关键帧补齐时间轴：
@@ -179,7 +189,7 @@ python scripts/depth_refine/run_refine.py \
 python scripts/depth_refine/run_refine.py \
   --dataset-dir "$DATASET" --result-root "$DATASET/depth_results_rife" \
   --statistics-dir "$RESULT_ROOT/baseline/statistics" \
-  --camera head --mapping quantile --stage rife
+  --camera head --mapping quantile --mapping-scope episode --stage rife
 ```
 
 示例将 RIFE 结果放在独立目录，便于与 full 比较。同一路径运行不同阶段/映射会重写报告和同名结果；每次运行都会重新拟合，不会直接加载上次验证报告中的映射。
@@ -193,9 +203,11 @@ python scripts/depth_refine/run_refine.py \
 | `--report-dir` | `<result-root>/refine/reports` | 报告根目录 |
 | `--input-depth-suffix` | `_depth` | 从 RGB 目录推导源深度目录时使用的后缀 |
 | `--input-pix-fmt` | `gray12le` | 源深度解码格式，可选 `gray16le` |
-| `--mapping` | `quantile` | `quantile` 或 `linear` |
+| `--mapping` | `transport` | `transport`、`quantile` 或 `linear`；只有 transport 产生概率质量矩阵 |
+| `--mapping-scope` | `frame` | frame 每帧独立；episode 沿用全局映射 |
+| `--transport-bins` | `256` | transport 直方图离散 bin 数，至少 2；只保存非空 bin |
 | `--quantiles` | `101` | quantile 拟合请求的分位点数，实际至少 3 个；重复源节点会去重 |
-| `--stage` | `validate` | `validate` 仅评估；`full` 逐帧映射；`rife` 稀疏关键帧补齐 |
+| `--stage` | `validate` | validate 搬运并评估已有参考帧；逐帧 full 要求完整同帧参考；rife 仅支持 episode scope |
 | `--allow-unvalidated` | 关闭 | 未满足指标改善条件时仍生成视频 |
 | `--max-depth-mm` | `4095` | 映射输出上限；编码器仍会裁剪到 4095 |
 | `--plot-trend` | 关闭 | 保存逐采样帧均值及 Wasserstein 趋势图 |
@@ -206,6 +218,24 @@ python scripts/depth_refine/run_refine.py \
 ### 如何阅读验证报告
 
 `refine_parameters.json` 包含映射参数、采样索引、迁移前 `baseline` 指标、迁移后 `transferred` 指标及逐帧 `frame_metrics`。quantile 映射还会记录 `requested_quantiles`、`effective_quantile_nodes` 和 `mapping_segments`，用于区分请求的 q101 配置与量化去重后的实际节点数。此处报告字段 `baseline` 指的是迁移前的原深度指标，与磁盘上的 Nested baseline 目录含义不同。
+
+逐帧模式在 `frame_mappings` 中记录每帧参数、矩阵路径和耗时。每个阶段独立保存到 `<report-dir>/<camera>/<episode>/<validate|full>/`：
+
+- `frame_mappings/frame_000000000.npz`：每帧的矩阵/映射，帧号从 0 开始，与源视频一致。
+- `frame_timings.csv`：每帧参考读取、resize/有效像素配对、直方图和矩阵拟合、应用映射、NPZ 写盘、合计耗时（秒）。
+- `frame_timing_summary.json`：完成/失败帧数及各项耗时的总和、均值、最小值、P50、P95、最大值。
+
+完整逐帧 full 不会复用全局/邻帧矩阵；任何同帧参考缺失都会报错。validate 可以使用稀疏参考，但只为实际参考帧生成矩阵和计时。RIFE 插值帧没有独立求解的矩阵，因此不用于完整逐帧搬运。
+
+transport NPZ 使用 COO 稀疏存储：`row`、`col`、`mass`、`shape`，并包含 `source_depth_mm`、`target_depth_mm`、`source_mass`、`target_mass`、`mapped_depth_mm`、`frame_index`。行/列边缘分别等于源/目标概率直方图，总质量为 1；bin 深度为该 bin 内实际像素均值。可重建普通矩阵：
+
+```python
+with np.load("frame_000000000.npz", allow_pickle=False) as plan:
+    T = np.zeros(tuple(plan["shape"]))
+    np.add.at(T, (plan["row"], plan["col"]), plan["mass"])
+```
+
+输出是矩阵行重心的确定性深度映射，按源 bin 代表深度线性插值，再裁剪；当同一个源深度需要分流到多个目标深度时，重心投影不会精确复现目标直方图。提高 `--transport-bins` 可提高离散精度。旧 quantile/linear 的 NPZ 只保存各自映射参数，不称为 OT 质量矩阵。
 
 排查灰度色斑时可在 full 命令后追加：
 
@@ -250,7 +280,7 @@ python scripts/depth_refine/run_batch.py \
   --stage all --sample-stride 5 --save-video \
   --refine-stage validate --plot-mean-curve
 
-# 基于已有参考生成完整结果
+# 基于已有完整逐帧参考生成完整结果
 python scripts/depth_refine/run_batch.py \
   --root data/lerobot --cameras head left_wrist right_wrist \
   --stage refine --refine-stage full --plot-mean-curve
@@ -270,11 +300,12 @@ python scripts/depth_refine/run_batch.py \
 | `--force` | 关闭 | 传给 baseline，重新生成已有统计 |
 | `--save-video` | 关闭 | 传给 baseline，保存稀疏视频 |
 | `--refine-stage` | `validate` | 传给 refine：`validate`、`full`、`rife` |
+| `--mapping` / `--mapping-scope` / `--transport-bins` | `transport` / `frame` / `256` | 传给 refine；逐帧 full 的 baseline 必须用 `--sample-stride 1` 或 `--sample-count 0` |
 | `--plot-mean-curve` | 关闭 | refine 后根据报告绘制原始/参考/迁移后均值曲线 |
 | `--dry-run` | 关闭 | 只打印项目、相机和阶段，不执行子脚本或绘图 |
 | `--replace-depth-video` | 关闭 | 存在替换实现问题，见下文 |
 
-当前代码**支持 chest，且默认包含 chest**，与旧 README 中“不参与批处理”的说法不同。结果固定为各项目的 `depth_results/`；切换采样配置后用 `--force` 重新生成 baseline。批处理器没有暴露 `--mapping`、模型、设备、帧率、自定义结果路径或 `--allow-unvalidated`，需要这些参数时直接运行对应单项目脚本。
+当前代码**支持 chest，且默认包含 chest**，与旧 README 中“不参与批处理”的说法不同。结果固定为各项目的 `depth_results/`；切换采样配置后用 `--force` 重新生成 baseline。批处理器没有暴露模型、设备、帧率、自定义结果路径或 `--allow-unvalidated`，需要这些参数时直接运行对应单项目脚本。
 
 `--replace-depth-video` 的帮助文本表示替换原数据集深度，但当前函数实际从生成视频所在的结果 chunk 查找目标，没有使用 `project/videos` 定位，可能只是把结果复制回自身。因此不要依赖此选项完成原深度替换；本文示例均保留独立输出。validate 本身不生成可替换视频。
 
@@ -448,6 +479,8 @@ python scripts/depth_refine/inspect_dataset.py --help
 
 ## 9. 逐 episode、逐视角耗时
 
-baseline/refine 自动将最近一次处理的墙钟耗时写入 `depth_results/timings/`，包含每个视角的独立记录，区分 Nested/Metric 和 refine 的 validate/full/rife 阶段。运行 `python scripts/depth_refine/summarize_timings.py --result-root "$RESULT_ROOT"` 导出单视角明细 `per_view.csv` 和三视角合计 `per_episode.csv`。缺失或未完成的视角不会按零秒计入完整合计。
+baseline/refine 自动将最近一次处理的墙钟耗时写入 `depth_results/timings/`，包含每个视角的独立记录，区分 Nested/Metric 和 refine 的 validate/full/rife 阶段。运行 `python scripts/depth_refine/summarize_timings.py --result-root "$RESULT_ROOT"` 导出单视角明细 `per_view.csv`、三视角合计 `per_episode.csv` 及逐帧明细 `per_frame.csv`。缺失或未完成的视角不会按零秒计入完整合计。
+
+逐帧 CSV 的 `fit_seconds` 是直方图构建和搬运矩阵求解耗时，`apply_seconds` 是应用映射耗时，`total_seconds` 包含参考读取、配对、拟合、应用和矩阵写盘。视频解码、评估、绘图、preencode 保存及编码计入 episode 总耗时，不分摊到各帧；旧结果无法反推真实逐帧耗时。
 
 三视角运行、单视角筛选和计时范围见[命令速查第 6 节](COMMANDS.md#6-每条-episode-的-nested--refine-耗时)。旧结果需要重新运行才能得到真实耗时。

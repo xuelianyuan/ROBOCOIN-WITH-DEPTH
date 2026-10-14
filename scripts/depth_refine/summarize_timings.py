@@ -3,8 +3,12 @@
 import argparse
 import csv
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src.depth_refine.pipeline.frame_transfer import FRAME_TIMING_FIELDS
 
 
 def summarize(result_root, cameras):
@@ -35,6 +39,20 @@ def write_csv(path, rows, fields):
         writer.writerows(rows)
 
 
+def summarize_frames(rows: list[dict]) -> list[dict]:
+    """按已有 episode 记录定位逐帧 CSV，保留阶段和相机信息。"""
+    frames = []
+    for row in rows:
+        if not row.get("frame_timings_csv"):
+            continue
+        path = Path(row["frame_timings_csv"])
+        with path.open(newline="", encoding="utf-8-sig") as stream:
+            for frame in csv.DictReader(stream):
+                frames.append({**frame, "frame_report_dir": str(path.parent),
+                               **{k: row[k] for k in ("chunk", "episode", "camera", "stage")}})
+    return frames
+
+
 def main():
     parser = argparse.ArgumentParser(description="逐 episode、逐视角 Nested/refine 耗时汇总（秒）")
     parser.add_argument("--result-root", required=True, type=Path)
@@ -52,10 +70,13 @@ def main():
     write_csv(out / "per_episode.csv", totals,
               ["chunk", "episode", "stage", "completed_views", "expected_views",
                "missing_views", "total_seconds"])
+    frames = summarize_frames(rows)
+    write_csv(out / "per_frame.csv", frames,
+              ["chunk", "episode", "camera", "stage", "frame_report_dir", *FRAME_TIMING_FIELDS])
     for row in rows:
         print(f"{row['chunk']}/{row['episode']} {row['camera']} {row['stage']}: "
               f"{row['elapsed_seconds']:.3f}s [{row['status']}]")
-    print(f"CSV: {out / 'per_view.csv'}\nCSV: {out / 'per_episode.csv'}")
+    print(f"CSV: {out / 'per_view.csv'}\nCSV: {out / 'per_episode.csv'}\nCSV: {out / 'per_frame.csv'}")
 
 
 if __name__ == "__main__":

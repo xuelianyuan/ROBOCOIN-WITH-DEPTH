@@ -138,7 +138,7 @@ def main() -> None:
     parser.add_argument("--stage", choices=["baseline", "refine", "all", "plot"], default="baseline",
                         help="执行阶段：baseline、refine、all 或 plot（仅绘图），默认：baseline")
     sampling = parser.add_mutually_exclusive_group()
-    sampling.add_argument("--sample-stride", type=int, default=5,
+    sampling.add_argument("--sample-stride", type=int, default=None,
                           help="源视频采样步长，必须大于 0，默认：每 5 帧一次")
     sampling.add_argument("--sample-count", type=int, default=None,
                           help="改用均匀定量采样；非正数表示全部帧，与 --sample-stride 互斥")
@@ -148,6 +148,9 @@ def main() -> None:
                         help="保存 Nested 稀疏 baseline 深度视频")
     parser.add_argument("--refine-stage", choices=["validate", "full", "rife"], default="validate",
                         help="refine 的具体模式：validate、full 或 rife，默认：validate")
+    parser.add_argument("--mapping", choices=["transport", "quantile", "linear"], default="transport")
+    parser.add_argument("--mapping-scope", choices=["frame", "episode"], default="frame")
+    parser.add_argument("--transport-bins", type=int, default=256)
     parser.add_argument("--replace-depth-video", action="store_true",
                         help="将 refine 生成的完整深度视频替换数据集 videos 中对应的原始深度视频")
     parser.add_argument("--plot-mean-curve", action="store_true",
@@ -155,8 +158,17 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="只打印将处理的项目和视角，不实际运行子脚本")
     args = parser.parse_args()
+    if args.sample_stride is None:
+        args.sample_stride = 5
     if args.sample_count is None and args.sample_stride <= 0:
         parser.error("--sample-stride 必须大于 0")
+    if args.transport_bins < 2:
+        parser.error("--transport-bins 必须至少为 2")
+    if args.stage in ("refine", "all") and args.refine_stage == "rife" and args.mapping_scope == "frame":
+        parser.error("rife 请使用 --mapping-scope episode；逐帧搬运请使用 --refine-stage full")
+    if (args.stage == "all" and args.refine_stage == "full" and args.mapping_scope == "frame"
+            and args.sample_count is None and args.sample_stride != 1):
+        parser.error("逐帧 full 需要完整参考，请使用 --sample-stride 1 或 --sample-count 0")
     # ===== 路径准备：转为绝对路径，保证子脚本收到稳定路径 =====
     root = Path(args.root).resolve()
     found = projects(root)
@@ -196,7 +208,9 @@ def main() -> None:
                 # all 模式会在 baseline 成功后执行；单独执行时必须已有统计结果。
                 refine = [sys.executable, "scripts/depth_refine/run_refine.py", "--dataset-dir", str(project),
                           "--camera", CAMERA_KEYS[camera], "--result-root", str(result_root),
-                          "--stage", args.refine_stage]
+                          "--stage", args.refine_stage, "--mapping", args.mapping,
+                          "--mapping-scope", args.mapping_scope,
+                          "--transport-bins", str(args.transport_bins)]
                 print("[refine]", project.name, camera)
                 if not args.dry_run:
                     subprocess.run(refine, check=True)

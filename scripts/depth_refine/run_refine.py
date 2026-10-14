@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """用 Nested 稀疏参考校准原始深度视频的数值分布。
 
-重要：这里的“迁移”不是复制 Nested 的图像内容，也不是空间滤波。脚本把同一
-episode 的所有采样像素汇总，拟合一条全局的一维函数 ``Nested=f(Source)``，
-再将该函数逐像素应用于源深度。因此输出保留源深度的边缘、噪声和局部纹理；
+默认逐帧搬运：每个源帧与同帧 Nested 参考独立拟合 ``Nested=f(Source)``，
+transport 方法保存该帧直方图的稀疏 OT 矩阵，并通过行重心构造数值映射。
+这不是复制 Nested 的图像内容，也不是空间滤波。因此输出保留源深度的边缘、噪声和局部纹理；
 分位数曲线斜率较陡或有平台时，还可能放大源图已有的小幅起伏。
 
 数据链路：
@@ -11,10 +11,11 @@ episode 的所有采样像素汇总，拟合一条全局的一维函数 ``Nested
 1. 从 ``videos/`` 解码原始深度视频（默认按 gray12le 数值读取）。
 2. 从 ``depth_results/baseline/statistics/`` 读取 Nested 采样帧 NPY；若尺寸
    不同，先把 Nested 双线性缩放至源深度尺寸，仅用于配对、拟合和验证。
-3. ``quantile`` 将所有采样帧的有效像素合并后做全局直方图/分位数匹配；
-   ``linear`` 则在源深度 1%--99% 区间拟合一条直线。
-4. ``validate`` 只写报告；``full`` 对原视频每帧使用同一映射；``rife`` 只
-   映射采样帧，再由 RGB 引导的 RIFE 补齐时间轴。
+3. ``transport`` 求解每帧直方图最优传输；``quantile`` 做分位数匹配；
+   ``linear`` 在源深度 1%--99% 区间拟合直线。``--mapping-scope episode``
+   可恢复合并采样像素、拟合全局映射的旧行为。
+4. ``validate`` 只处理参考帧并写矩阵/报告；逐帧 ``full`` 要求完整同帧参考。
+   ``rife`` 仅适用于 episode scope，由 RGB 引导补齐时间轴。
 5. 输出先裁剪至 ``max_depth_mm``，随后编码器再裁剪至 12-bit [0, 4095]、
    转为 uint16，并用 gray12le/libx265 写视频；当前调用不会做 min-max 归一化。
 
@@ -22,7 +23,7 @@ episode 的所有采样像素汇总，拟合一条全局的一维函数 ``Nested
 ``--save-preencode-npy`` 将 full/rife 的编码前 float32 帧逐帧保存，便于和视频
 解码结果比较，从而区分映射伪影与量化、编码伪影。
 
-所以报告中的全局直方图改善不保证每一帧、每个空间区域都改善。诊断灰度色斑
+所以报告中的直方图改善不保证每个空间区域都改善。诊断灰度色斑
 时，应分别比较映射前、映射后编码前数组、视频解码值和显示归一化结果。
 
 用法示例::
@@ -30,7 +31,7 @@ episode 的所有采样像素汇总，拟合一条全局的一维函数 ``Nested
     python scripts/depth_refine/run_refine.py \
         --dataset-dir data/lerobot/your_dataset \
         --result-root data/lerobot/your_dataset/depth_results \
-        --camera head --mapping quantile --stage validate --plot-trend
+        --camera head --mapping transport --stage validate --plot-trend
 
 输出：报告位于 ``depth_results/refine/reports/``，生成的视频位于
 ``depth_results/refine/videos/``。
@@ -44,9 +45,14 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import cv2
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src.depth_refine.methods.mapping import (
+    _valid_pair, _fit_mapping, _apply_mapping, _mapping_slope_report,
+)
+from src.depth_refine.pipeline.frame_transfer import (
+    transfer_frames, require_frame_references, frame_timing_summary,
+)
 from src.depth_refine.timing import episode_timer
 from src.depth_refine.io_utils import iter_video_frames
 from src.depth_encoder import DepthVideoEncoder
@@ -72,17 +78,6 @@ def _decode(path: Path, pix_fmt: str) -> list[np.ndarray]:
 
 
 # ======================== 二、有效像素配对与评估指标 ========================
-
-def _valid_pair(pred: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    # Nested 输出尺寸可能与原始深度视频不同；将参考深度缩放到源帧尺寸后
-    # 才能建立逐像素对应关系。深度是连续数值，使用线性插值而非 RGB 插值。
-    if pred.shape != target.shape:
-        target = cv2.resize(target.astype(np.float32),
-                            (pred.shape[1], pred.shape[0]),
-                            interpolation=cv2.INTER_LINEAR)
-    mask = np.isfinite(pred) & np.isfinite(target) & (pred > 0) & (target > 0)
-    return pred[mask].astype(np.float64), target[mask].astype(np.float64)
-
 
 def _wasserstein_1d(x: np.ndarray, y: np.ndarray, points: int = 1001) -> float | None:
     """用等概率分位点积分近似一维 Wasserstein-1/EMD。"""
@@ -114,97 +109,6 @@ def _metrics(pred: list[np.ndarray], target: list[np.ndarray]) -> dict:
 
 
 # =========================== 三、拟合并应用数值映射 ===========================
-
-def _fit_mapping(x: np.ndarray, y: np.ndarray, method: str, quantiles: int) -> dict:
-    """拟合 episode 级全局映射；输入已合并所有采样帧，不保留空间/时间位置。"""
-    if method == "linear":
-        lo, hi = np.percentile(x, [1, 99])
-        keep = (x >= lo) & (x <= hi)
-        a, b = np.linalg.lstsq(
-            np.stack([x[keep], np.ones(keep.sum())], axis=1), y[keep], rcond=None,
-        )[0]
-        return {"method": method, "a": float(a), "b_mm": float(b),
-                "fit_samples": int(keep.sum())}
-    q = np.linspace(0, 100, max(3, quantiles))
-    source = np.percentile(x, q)
-    target = np.percentile(y, q)
-    source, unique_idx = np.unique(source, return_index=True)
-    return {"method": method, "source_quantiles_mm": source.tolist(),
-            "target_quantiles_mm": target[unique_idx].tolist(),
-            # 12-bit 深度量化可能让多个分位点对应同一个源深度值。分别记录
-            # 请求值和去重后的有效值，避免仅凭映射节点数误判实验配置。
-            "requested_quantiles": int(max(3, quantiles)),
-            "effective_quantile_nodes": int(source.size),
-            "mapping_segments": int(max(0, source.size - 1)),
-            "fit_samples": int(x.size)}
-
-
-def _mapping_slope_report(mapping: dict, top_k: int = 20) -> dict:
-    """汇总映射曲线斜率，并列出最可能放大源深度起伏的区间。"""
-    if mapping["method"] == "linear":
-        slope = float(mapping["a"])
-        return {"method": "linear", "segment_count": 1,
-                "slope_min": slope, "slope_p50": slope, "slope_p90": slope,
-                "slope_p95": slope, "slope_p99": slope, "slope_max": slope,
-                "steepest_segments": []}
-
-    source = np.asarray(mapping["source_quantiles_mm"], dtype=np.float64)
-    target = np.asarray(mapping["target_quantiles_mm"], dtype=np.float64)
-    source_delta = np.diff(source)
-    target_delta = np.diff(target)
-    usable = np.isfinite(source_delta) & np.isfinite(target_delta) & (source_delta > 0)
-    indices = np.flatnonzero(usable)
-    slopes = target_delta[usable] / source_delta[usable]
-    if not slopes.size:
-        return {"method": "quantile", "segment_count": 0,
-                "reason": "no_finite_positive_source_intervals",
-                "steepest_segments": []}
-
-    order = np.argsort(slopes)[::-1][:max(0, top_k)]
-    steepest = []
-    for rank in order:
-        i = int(indices[rank])
-        steepest.append({
-            "source_start_mm": float(source[i]),
-            "source_end_mm": float(source[i + 1]),
-            "target_start_mm": float(target[i]),
-            "target_end_mm": float(target[i + 1]),
-            "source_delta_mm": float(source_delta[i]),
-            "target_delta_mm": float(target_delta[i]),
-            "slope": float(slopes[rank]),
-        })
-    percentile_values = np.percentile(slopes, [50, 90, 95, 99])
-    return {
-        "method": "quantile", "segment_count": int(slopes.size),
-        "slope_min": float(slopes.min()),
-        "slope_p50": float(percentile_values[0]),
-        "slope_p90": float(percentile_values[1]),
-        "slope_p95": float(percentile_values[2]),
-        "slope_p99": float(percentile_values[3]),
-        "slope_max": float(slopes.max()),
-        "segments_above_1": int(np.count_nonzero(slopes > 1)),
-        "segments_above_2": int(np.count_nonzero(slopes > 2)),
-        "segments_above_5": int(np.count_nonzero(slopes > 5)),
-        "steepest_segments": steepest,
-    }
-
-
-def _apply_mapping(frame: np.ndarray, mapping: dict, max_depth: float) -> np.ndarray:
-    """逐像素应用同一标量映射；不参考邻域，也不执行空间去噪。"""
-    out = np.zeros(frame.shape, dtype=np.float32)
-    valid = np.isfinite(frame) & (frame > 0)
-    if mapping["method"] == "linear":
-        out[valid] = mapping["a"] * frame[valid] + mapping["b_mm"]
-    # 将 Metric 的深度值映射到 Nested 的深度分布，并不考虑相邻像素，也不会用 Nested 的局部形状替换原图。因此：
-    #   - 原图中的局部深度起伏会被保留。
-    #   - 映射曲线较陡的区间，会把微小深度差放大，显示成更明显的灰度斑块。
-    #   - Nested 自身更平滑，但匹配它的数值分布，并不能获得同样平滑的画面。
-    else:
-        out[valid] = np.interp(
-            frame[valid], mapping["source_quantiles_mm"], mapping["target_quantiles_mm"],
-        )
-    return np.clip(out, 0, max_depth)
-
 
 def _save_preencode_frames(frames: list[np.ndarray], output_dir: Path) -> None:
     """逐帧保存编码前 float32 深度，帧号与最终视频从 0 开始的帧号一致。"""
@@ -251,7 +155,7 @@ def _plot_trend(path: Path, ids: list[int], before: list[dict], after: list[dict
 # ============================== 五、主处理流程 ==============================
 
 def main() -> None:
-    """逐相机、逐 episode 拟合一次全局映射，并按所选阶段验证或生成视频。"""
+    """逐相机、逐 episode 执行逐帧或兼容全局映射，再验证或生成视频。"""
     # ---------- 5.1 参数：输入数值域、映射方法、阶段与编码设置 ----------
     p = argparse.ArgumentParser(description="Nested 深度分布迁移、验证与 RIFE 补帧")
     p.add_argument("--dataset-dir", required=True)
@@ -264,8 +168,12 @@ def main() -> None:
                    help="refine 报告目录；默认 <result-root>/refine/reports")
     p.add_argument("--input-depth-suffix", default="_depth")
     p.add_argument("--input-pix-fmt", default="gray12le", choices=["gray12le", "gray16le"])
-    p.add_argument("--mapping", default="quantile", choices=["quantile", "linear"],
-                   help="quantile 即一维最优传输/直方图匹配")
+    p.add_argument("--mapping", default="transport", choices=["transport", "quantile", "linear"],
+                   help="transport 保存真实直方图 OT 矩阵；quantile 为分位数插值；linear 为直线")
+    p.add_argument("--mapping-scope", default="frame", choices=["frame", "episode"],
+                   help="默认每帧独立拟合；episode 恢复合并采样像素的旧行为")
+    p.add_argument("--transport-bins", type=int, default=256,
+                   help="transport 的直方图 bin 数，至少 2；默认 256")
     p.add_argument("--quantiles", type=int, default=101,
                    help="quantile 映射请求的分位点数；默认 q101，重复源节点会去重")
     p.add_argument("--stage", default="validate", choices=["validate", "full", "rife"],
@@ -282,6 +190,13 @@ def main() -> None:
     p.add_argument("--preset", default="medium")
     p.add_argument("--fps", type=int, default=30)
     args = p.parse_args()
+    if args.transport_bins < 2:
+        p.error("--transport-bins 必须至少为 2")
+    if not np.isfinite(args.max_depth_mm) or args.max_depth_mm <= 0:
+        p.error("--max-depth-mm 必须为有限正数")
+    if args.stage == "rife" and args.mapping_scope == "frame":
+        p.error("rife 插值帧没有独立搬运矩阵；逐帧搬运请使用 --stage full，"
+                "旧 RIFE 流程请显式传入 --mapping-scope episode")
 
     # ---------- 5.2 解析目录并发现匹配相机的源 RGB/深度视频 ----------
     root = Path(args.dataset_dir)
@@ -306,7 +221,8 @@ def main() -> None:
         for source_path in sorted(source_dir.glob("episode_*.mp4")):
             # ---------- 5.3 读取源深度及相同帧号的 Nested 稀疏参考 ----------
             with episode_timer(result_root, stage=f"refine_{args.stage}", camera=camera,
-                               source=source_path, mapping=args.mapping) as timing:
+                               source=source_path, mapping=args.mapping,
+                               mapping_scope=args.mapping_scope) as timing:
                 ep_out = _statistics_episode(stat_root, camera, source_path.stem)
                 if ep_out is None:
                     timing["reason"] = "missing_baseline"
@@ -314,35 +230,61 @@ def main() -> None:
                 metadata = json.loads((ep_out / "sample_indices.json").read_text())
                 indices = [int(i) for i in metadata["sample_frame_indices"]]
                 source = _decode(source_path, args.input_pix_fmt)
-                valid_ids = [i for i in indices if i < len(source)
-                             and (ep_out / f"frame_{i:09d}.npy").exists()]
+                if args.mapping_scope == "frame":
+                    valid_ids = require_frame_references(
+                        ep_out, indices, len(source), full=args.stage == "full")
+                else:
+                    valid_ids = [i for i in indices if 0 <= i < len(source)
+                                 and (ep_out / f"frame_{i:09d}.npy").exists()]
+                report_path = report_root / camera / source_path.stem / "refine_parameters.json"
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                # 逐帧 full 的输出直接复用这里的结果，避免验证和输出重复搬运计时。
+                frame_transfers = []
+                if args.mapping_scope == "frame":
+                    frame_report_dir = report_path.parent / args.stage
+                    timing["frame_timings_csv"] = str((frame_report_dir / "frame_timings.csv").resolve())
+                    transferred, frame_transfers = transfer_frames(
+                        source, ep_out, valid_ids, frame_report_dir, method=args.mapping,
+                        quantiles=args.quantiles, transport_bins=args.transport_bins,
+                        max_depth_mm=args.max_depth_mm)
+                    for record in frame_transfers:
+                        for key in ("artifact_path", "matrix_path"):
+                            if record[key]:
+                                record[key] = f"{args.stage}/{record[key]}"
+                    mapping = {"method": args.mapping, "scope": "frame", "frame_count": len(frame_transfers)}
+                    timing["frame_timing_summary"] = frame_timing_summary(frame_transfers)
                 nested = [np.load(ep_out / f"frame_{i:09d}.npy") for i in valid_ids]
                 sampled = [source[i] for i in valid_ids]
-                pairs = [_valid_pair(x, y) for x, y in zip(sampled, nested)]
-                pairs = [(x, y) for x, y in pairs if x.size]
-                if not pairs:
-                    timing["reason"] = "no_valid_pairs"
-                    continue
-                # 注意：这里把全部采样帧打平合并。因此得到的是 episode 级全局
-                # 直方图映射，而不是逐帧映射，更不是空间位置一一搬运。
-                x = np.concatenate([v[0] for v in pairs])
-                y = np.concatenate([v[1] for v in pairs])
-                mapping = _fit_mapping(x, y, args.mapping, args.quantiles)
+                if args.mapping_scope == "episode":
+                    pairs = [_valid_pair(x, y) for x, y in zip(sampled, nested)]
+                    pairs = [(x, y) for x, y in pairs if x.size]
+                    if not pairs:
+                        timing["reason"] = "no_valid_pairs"
+                        continue
+                    # 仅兼容模式合并采样帧，所有输出帧共用这条全局映射。
+                    x = np.concatenate([v[0] for v in pairs])
+                    y = np.concatenate([v[1] for v in pairs])
+                    mapping = _fit_mapping(x, y, args.mapping, args.quantiles, args.transport_bins)
+                    transferred = [_apply_mapping(f, mapping, args.max_depth_mm) for f in sampled]
                 # ---------- 5.4 在采样帧验证映射，并写全局/逐帧指标 ----------
-                transferred = [_apply_mapping(f, mapping, args.max_depth_mm) for f in sampled]
                 before, after = _metrics(sampled, nested), _metrics(transferred, nested)
                 improved = all(after.get(k, float("inf")) < before.get(k, float("inf"))
                                for k in ("mae_mm", "rmse_mm", "wasserstein_mm"))
                 frame_before = [_metrics([a], [b]) for a, b in zip(sampled, nested)]
                 frame_after = [_metrics([a], [b]) for a, b in zip(transferred, nested)]
-                report = {"mapping": mapping, "stage": args.stage, "baseline": before,
+                report = {"mapping": mapping, "mapping_scope": args.mapping_scope,
+                          "stage": args.stage, "baseline": before,
                           "transferred": after, "improved": improved, "sample_indices": valid_ids,
                           "frame_metrics": [{"frame_index": i, "baseline": b, "transferred": a}
                                             for i, b, a in zip(valid_ids, frame_before, frame_after)]}
-                report_path = report_root / camera / source_path.stem / "refine_parameters.json"
-                report_path.parent.mkdir(parents=True, exist_ok=True)
+                if frame_transfers:
+                    report.update(frame_mappings=frame_transfers,
+                                  frame_timings_csv=f"{args.stage}/frame_timings.csv",
+                                  frame_timing_summary=frame_timing_summary(frame_transfers))
                 if args.report_mapping_slope:
-                    slope_report = _mapping_slope_report(mapping)
+                    slope_report = ({"scope": "frame", "frames": [
+                        {"frame_index": r["frame_index"], **_mapping_slope_report(r["mapping"])}
+                        for r in frame_transfers]} if frame_transfers else _mapping_slope_report(mapping))
                     report["mapping_slope"] = slope_report
                     report_path.with_name("mapping_slope.json").write_text(
                         json.dumps(slope_report, indent=2) + "\n")
@@ -360,7 +302,8 @@ def main() -> None:
                     continue
                 # ---------- 5.5 full 逐帧映射；rife 从映射后的关键帧补时间轴 ----------
                 if args.stage == "full":
-                    output = [_apply_mapping(f, mapping, args.max_depth_mm) for f in source]
+                    output = (transferred if args.mapping_scope == "frame" else
+                              [_apply_mapping(f, mapping, args.max_depth_mm) for f in source])
                 else:
                     rgb = _decode(rgb_dir / source_path.name, "rgb24")
                     if len(rgb) != len(source):

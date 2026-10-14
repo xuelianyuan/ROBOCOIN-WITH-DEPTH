@@ -63,22 +63,31 @@ python scripts/depth_refine/build_baseline.py \
 # 验证并绘制趋势图
 python scripts/depth_refine/run_refine.py \
   --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
-  --camera "$CAMERA" --mapping quantile --stage validate --plot-trend
+  --camera "$CAMERA" --mapping transport --mapping-scope frame --stage validate --plot-trend
+
+# 完整逐帧搬运前，为每个源帧生成同帧 Nested 参考（已有稀疏结果需重建）
+python scripts/depth_refine/build_baseline.py \
+  --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
+  --camera "$CAMERA" --sample-stride 1 --force
 
 # 逐帧迁移，生成 AFTER 对应的视频
 python scripts/depth_refine/run_refine.py \
   --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
-  --camera "$CAMERA" --mapping quantile --stage full \
+  --camera "$CAMERA" --mapping transport --mapping-scope frame --stage full \
   --report-mapping-slope --save-preencode-npy
 
 # 可选：RIFE 补帧，单独保存以便与 full 比较
 python scripts/depth_refine/run_refine.py \
   --dataset-dir "$DATASET" --result-root "$DATASET/depth_results_rife" \
   --statistics-dir "$RESULT_ROOT/baseline/statistics" \
-  --camera "$CAMERA" --mapping quantile --stage rife
+  --camera "$CAMERA" --mapping quantile --mapping-scope episode --stage rife
 ```
 
 full/rife 默认仅在 MAE、RMSE、Wasserstein 全部改善时生成视频。RIFE 需额外模型依赖；后续命令中的 `AFTER` 仍指向 full 结果。
+
+默认逐帧处理：每帧独立拟合并保存矩阵和计时，full 缺少任何同帧参考都会报错。validate 只处理已有参考帧。旧的全局分位数流程可显式使用 `--mapping quantile --mapping-scope episode`。
+
+每帧搬运矩阵位于 `$RESULT_ROOT/refine/reports/$CAMERA/$EPISODE/full/frame_mappings/frame_<源帧号>.npz`（稀疏 COO 格式），同目录阶段根下的 `frame_timings.csv` 记录每帧参考读取、配对、拟合、应用和写盘时间，`frame_timing_summary.json` 提供均值和 P95 等汇总。
 
 ## 3. run_batch.py：批量处理
 
@@ -103,7 +112,7 @@ python scripts/depth_refine/run_batch.py \
   --stage all --sample-stride 5 --save-video \
   --refine-stage validate --plot-mean-curve
 
-# 基于已有参考生成完整结果
+# 基于已有完整逐帧参考生成完整结果
 python scripts/depth_refine/run_batch.py \
   --root data/lerobot --cameras "${BATCH_CAMERAS[@]}" \
   --stage refine --refine-stage full
@@ -168,10 +177,10 @@ PCD 导出要求数据路径含 `<dataset>_depth_preview/<task>`，且 baseline 
 for VIEW in cam_front_head cam_left_wrist cam_right_wrist; do
   python scripts/depth_refine/build_baseline.py \
     --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
-    --camera "$VIEW" --sample-stride 5 --save-video --force || break
+    --camera "$VIEW" --sample-stride 1 --save-video --force || break
   python scripts/depth_refine/run_refine.py \
     --dataset-dir "$DATASET" --result-root "$RESULT_ROOT" \
-    --camera "$VIEW" --mapping quantile --stage full || break
+    --camera "$VIEW" --mapping transport --mapping-scope frame --stage full || break
 done
 
 # 三视角明细 + 每条 episode 的三视角合计
@@ -184,8 +193,11 @@ python scripts/depth_refine/summarize_timings.py \
 
 - `timings/per_view.csv`：每条 episode × 单视角 × 阶段的秒数、状态和帧数。
 - `timings/per_episode.csv`：每条 episode 按阶段汇总所选视角；缺失、跳过或失败时合计留空，并列出缺失视角。
+- `timings/per_frame.csv`：各相机、episode、阶段的逐帧搬运耗时明细；只汇总实际逐帧处理的记录。
 - `timings/<stage>/<chunk>/<camera>/<episode>.json`：保留该阶段最近一次实际尝试。阶段分别为 `da3_nested`（或 `da3`）、`refine_validate`、`refine_full`、`refine_rife`，不会混算。
 
 耗时为单视频处理的墙钟时间，包括读取/解码、计算、统计、结果写入及可选编码/绘图；不包括进程启动和 episode 外的初始化。模型按需加载，因此首次推理的模型加载开销计入首条 episode。三视角合计为各视角耗时之和，不代表并行处理时的实际等待时间。
 
-旧结果没有计时数据，不能用文件时间戳准确还原。上述 `--force` 会重新生成 baseline 并覆盖其结果和计时；不加时已有 baseline 直接跳过、保留原计时。refine 每次重新处理并更新对应阶段计时。验证未通过而跳过视频的 full/rife 记录标为 `skipped`，不算完整 refine。汇总命令每次覆盖两份 CSV，原始 JSON 保留。
+逐帧明细中的 `fit_seconds` 是直方图和矩阵求解，`apply_seconds` 是映射应用，`total_seconds` 加上参考读取、配对和 NPZ 写盘。视频解码、指标计算、绘图、preencode 保存及视频编码计入 episode 总耗时，不分摊到各帧。
+
+旧结果没有计时数据，不能用文件时间戳准确还原。上述 `--force` 会重新生成 baseline 并覆盖其结果和计时；不加时已有 baseline 直接跳过、保留原计时。refine 每次重新处理并更新对应阶段计时。验证未通过而跳过视频的 full/rife 记录标为 `skipped`，不算完整 refine。汇总命令每次覆盖三份 CSV，原始 JSON 保留。
