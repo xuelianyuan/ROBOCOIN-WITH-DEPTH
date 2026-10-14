@@ -48,6 +48,7 @@ import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.depth_refine.timing import episode_timer
+from src.depth_refine.io_utils import iter_video_frames
 from src.depth_encoder import DepthVideoEncoder
 
 
@@ -67,21 +68,7 @@ def _probe(path: Path) -> tuple[int, int]:
 
 def _decode(path: Path, pix_fmt: str) -> list[np.ndarray]:
     """解码 RGB 或 12/16-bit 单通道视频。"""
-    w, h = _probe(path)
-    r = subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(path),
-         "-f", "rawvideo", "-pix_fmt", pix_fmt, "-"],
-        capture_output=True, check=False,
-    )
-    if r.returncode:
-        raise RuntimeError(f"ffmpeg decode failed: {path}")
-    is_depth = pix_fmt in {"gray12le", "gray16le"}
-    dtype, channels = (np.uint16, 1) if is_depth else (np.uint8, 3)
-    raw = np.frombuffer(r.stdout, dtype=dtype)
-    size = w * h * channels
-    return [raw[i:i + size].reshape(h, w) if is_depth
-            else raw[i:i + size].reshape(h, w, 3)
-            for i in range(0, len(raw) - size + 1, size)]
+    return list(iter_video_frames(path, pix_fmt))
 
 
 # ======================== 二、有效像素配对与评估指标 ========================
