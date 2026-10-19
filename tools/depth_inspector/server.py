@@ -19,7 +19,7 @@ from PIL import Image
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent.parent
 OUTPUT_HTML = PROJECT_ROOT / "outputs" / "depth_inspector.html"
-VIEWS = ("head", "left", "right")
+VIEWS = ("chest", "head", "left", "right")
 METHODS = ("metric", "nested", "refine")
 
 
@@ -36,7 +36,8 @@ def probe(path: Path) -> dict:
 
 
 def camera_name(paths: list[Path], view: str) -> str | None:
-    keys = {"head": ("front_head", "camera_head", "cam_head"),
+    keys = {"chest": ("front_chest", "camera_chest", "cam_chest"),
+            "head": ("front_head", "camera_head", "cam_head"),
             "left": ("left_wrist", "camera_left", "cam_left"),
             "right": ("right_wrist", "camera_right", "cam_right")}[view]
     for path in paths:
@@ -47,7 +48,8 @@ def camera_name(paths: list[Path], view: str) -> str | None:
 
 def discover_pcds(root: Path, view: str, method: str) -> list[str]:
     """发现视角和方法均匹配的点云，避免三种方法错误复用同一文件。"""
-    keys = {"head": ("front_head", "cam_head"),
+    keys = {"chest": ("front_chest", "cam_chest"),
+            "head": ("front_head", "cam_head"),
             "left": ("left_wrist", "cam_left"),
             "right": ("right_wrist", "cam_right")}[view]
     candidates = list(root.rglob("*.pcd"))
@@ -57,7 +59,8 @@ def discover_pcds(root: Path, view: str, method: str) -> list[str]:
         task = root.name
         pcd_method = {"metric": "original", "nested": "baseline", "refine": "refine"}[method]
         pcd_base = PROJECT_ROOT / "pcds" / dataset_dir / task / pcd_method
-        camera_dir = {"head": "cam_front_head", "left": "cam_left_wrist", "right": "cam_right_wrist"}[view]
+        camera_dir = {"chest": "cam_front_chest", "head": "cam_front_head",
+                      "left": "cam_left_wrist", "right": "cam_right_wrist"}[view]
         scoped = sorted((pcd_base / camera_dir).glob("*.pcd"))
         if scoped:
             return [str(path.resolve()) for path in scoped]
@@ -78,8 +81,21 @@ def discover(root: Path) -> dict:
     videos = list(root.glob("videos/chunk-*/**/episode_*.mp4"))
     nested = list(root.glob("depth_results/baseline/videos/chunk-*/**/episode_*.mp4"))
     refined = list(root.glob("depth_results/refine/videos/chunk-*/**/episode_*.mp4"))
+
+    # Validation datasets keep the three methods in separate repository trees:
+    # original metric depth, sparse Nested output, and the final refined depth.
+    # Accepting the original task directory here keeps the documented command
+    # repository-relative and avoids one-off manifests with machine-local paths.
+    dataset = root.parent.name
+    if dataset.endswith("_depth_preview"):
+        task = root.name
+        nested += list((PROJECT_ROOT / "outputs" / "refine_validation" / dataset / task /
+                       "baseline" / "videos").glob("chunk-*/**/episode_*.mp4"))
+        refined += list((PROJECT_ROOT / "data" / "refine" / dataset / task /
+                        "videos").glob("chunk-*/**/episode_*.mp4"))
     cfg = {"title": root.name, "rgb": {}, "groups": {},
            "invalid_depth": {"min_exclusive": 0, "max_exclusive": 4095}}
+    available_views = []
     for view in VIEWS:
         rgb_name = camera_name([p for p in videos if p.parent.name.endswith("_rgb")], view)
         depth_name = camera_name([p for p in videos if p.parent.name.endswith("_depth")], view)
@@ -91,13 +107,17 @@ def discover(root: Path) -> dict:
         for method, path in candidates.items():
             pcd_files = discover_pcds(root, view, method)
             cfg["groups"][f"{view}.{method}"] = {"depth": str(path.resolve()) if path else None, "pcd": pcd_files or None}
+        if rgb_name or any(cfg["groups"][f"{view}.{method}"]["depth"] for method in METHODS):
+            available_views.append(view)
+    cfg["views"] = available_views
     return cfg
 
 
 class Inspector:
     def __init__(self, cfg: dict):
         self.cfg = cfg
-        self.meta: dict = {"title": cfg.get("title", "Depth inspector"), "groups": {}, "rgb": {}, "ready": False}
+        self.meta: dict = {"title": cfg.get("title", "Depth inspector"), "views": cfg.get("views", list(VIEWS)),
+                           "groups": {}, "rgb": {}, "ready": False}
         self.frames: dict[str, dict] = {}
         self.preview_dir = tempfile.TemporaryDirectory(prefix="depth-inspector-")
         self.previews: dict[str, Path] = {}

@@ -1,12 +1,14 @@
-const views=['head','left','right'], methods=['metric','nested','refine'];
-const labels={head:'HEAD',left:'LEFT WRIST',right:'RIGHT WRIST',metric:'Metric',nested:'Nested',refine:'Refine'};
+let views=[];const methods=['metric','nested','refine'];
+const labels={chest:'CHEST',head:'HEAD',left:'LEFT WRIST',right:'RIGHT WRIST',metric:'Metric',nested:'Nested',refine:'Refine'};
 const state={meta:null,frame:0,pcdFrame:0,playing:false,loops:1,last:0,lastMedia:0,offsets:{}};
 const $=s=>document.querySelector(s), clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 
 // ============================== 初始化与表格布局 ==============================
 async function load(){const meta=await fetch('/api/meta').then(r=>r.json());state.meta=meta;if(meta.error){$('#status').textContent=`加载失败：${meta.error}`;return}if(!meta.ready){$('#status').textContent=meta.status||'正在分析深度视频...';setTimeout(load,700);return}init()}
 function init(){
+  views=state.meta.views?.length?state.meta.views:['head','left','right'];
   $('#title').textContent=state.meta.title;$('#status').textContent='全视频有效深度统计已完成';
+  $('#table').style.gridTemplateColumns=`150px repeat(${views.length},minmax(330px,1fr))`;
   $('#table').innerHTML=headerRow()+rgbRow()+methods.map(method=>methodRow(method)).join('')+curveRow();
   document.querySelectorAll('.offset input').forEach(input=>input.oninput=()=>{state.offsets[input.dataset.id]=+input.value;input.nextElementSibling.textContent=signed(+input.value);syncRgb(true);renderMedia()});
   $('#timeline').max=Math.max(0,maxFrames()-1);$('#timeline').oninput=e=>seek(+e.target.value);$('#play').onclick=toggle;

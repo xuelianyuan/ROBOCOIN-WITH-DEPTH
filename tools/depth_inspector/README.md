@@ -1,13 +1,33 @@
 # Depth Inspector
 
-直接运行本地检查网页（需要 `ffmpeg`、`numpy`、`Pillow`）：
+在仓库根目录运行本地检查网页（需要 `ffmpeg`、`numpy`、`Pillow`）。传入
+`data/original` 中的任务目录后，检查器会自动关联仓库中的原始深度、Nested
+验证结果、refine 深度以及 PCD。
+
+AI2 四视角验证：
 
 ```bash
+cd /home/user/RoboCOIN-with-Depth
+conda activate depth
+
 python tools/depth_inspector/server.py \
-  --dataset data/lerobot/ai2_depth_preview/AI2_Alphabot_2_heat_test_tube_0_qced_hardlink_ep000000 \
+  --dataset data/original/ai2_depth_preview/AI2_Alphabot_2_clink_glasses_0_qced_hardlink_ep000000 \
   --port 8765
 
 # 浏览器打开 http://127.0.0.1:8765/outputs/depth_inspector.html
+```
+
+Leju 三视角验证（在另一个终端运行）：
+
+```bash
+cd /home/user/RoboCOIN-with-Depth
+conda activate depth
+
+python tools/depth_inspector/server.py \
+  --dataset data/original/leju_depth_preview/Leju_Kuavo_4_box_storage_parcel_0_qced_hardlink_ep000000 \
+  --port 8766
+
+# 浏览器打开 http://127.0.0.1:8766/outputs/depth_inspector.html
 ```
 
 也可以用 `manifest.example.json` 指定任意 RGB、gray12le 深度视频和 PCD 模板：
