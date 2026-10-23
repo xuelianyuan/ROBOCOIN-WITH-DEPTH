@@ -161,13 +161,17 @@ class Inspector:
             if not np.isfinite(video_min) or video_max <= video_min:
                 video_min, video_max = 0.0, 1.0
             pcd_source = group.get("pcd")
+            pcd_video_source = group.get("pcd_video")
+            pcd_video_path = Path(pcd_video_source) if pcd_video_source else None
             pcd_frames = []
             if isinstance(pcd_source, list):
                 pcd_frames = sorted({int(match.group(1)) for value in pcd_source
                                      if (match := re.search(r"frame[_-]?(\d+)", Path(value).stem))})
             item = {**info, "available": True, "min": video_min, "max": video_max,
                     "means": means, "pcd": bool(pcd_source), "pcd_frames": pcd_frames,
-                    "pcd_pattern": pcd_source if isinstance(pcd_source, str) else None}
+                    "pcd_pattern": pcd_source if isinstance(pcd_source, str) else None,
+                    "pcd_video": bool(pcd_video_path and pcd_video_path.is_file()),
+                    "pcd_video_url": f"/media/pcd/{key}" if pcd_video_path and pcd_video_path.is_file() else None}
             with self.lock: self.meta["groups"][key] = item
 
         # 每个视角内 Metric/Nested/Refine 共用三个视频的总 min/max。
@@ -304,6 +308,9 @@ class Handler(SimpleHTTPRequestHandler):
                 view = parsed.path.rsplit("/", 1)[-1]; self.path = INSPECTOR.cfg["rgb"][view]; return self._file(Path(self.path), "video/mp4")
             if parsed.path.startswith("/media/depth/"):
                 return self._file(INSPECTOR.previews[parsed.path.rsplit("/", 1)[-1]], "video/mp4")
+            if parsed.path.startswith("/media/pcd/"):
+                key = parsed.path.rsplit("/", 1)[-1]
+                return self._file(Path(INSPECTOR.cfg["groups"][key]["pcd_video"]), "video/mp4")
             return super().do_GET()
         except Exception as exc: self.send_data(json.dumps({"error": str(exc)}).encode(), "application/json", 404)
     def _file(self, path: Path, content_type: str):

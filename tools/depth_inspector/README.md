@@ -38,7 +38,7 @@ python tools/depth_inspector/server.py --manifest tools/depth_inspector/manifest
 
 启动时会同步生成报告入口 `outputs/depth_inspector.html`；交互 API 仍由本地服务提供，因此请保持服务运行后从 `http://127.0.0.1:8765/outputs/depth_inspector.html` 打开。
 
-功能：三视角×Metric/Nested/Refine 表格、共享时间轴、Depth/颜色直方图/PCD 同时展示、全局固定点云帧选择（抽取帧提示、任意帧输入并自动匹配最近的已有 PCD）、每组独立偏移、PCD 旋转/缩放、全视频逐帧 min/max、NaN/Inf/无效值过滤、同一视角三种方法统一 0–255 归一化、均值曲线、自动播放并在三遍循环后暂停。
+功能：三视角×Metric/Nested/Refine 表格、共享时间轴、Depth/颜色直方图/PCD 同时展示、manifest 中配置的点云视频同步播放、全局固定点云帧选择（抽取帧提示、任意帧输入并自动匹配最近的已有 PCD）、每组独立偏移、PCD 旋转/缩放、全视频逐帧 min/max、NaN/Inf/无效值过滤、同一视角三种方法统一 0–255 归一化、均值曲线、自动播放并在三遍循环后暂停。
 
 播放说明：
 
@@ -47,6 +47,7 @@ python tools/depth_inspector/server.py --manifest tools/depth_inspector/manifest
 - 稀疏结果（例如仅 20 帧的 Nested）按采样帧对齐显示，不能补出原视频的全部动作帧。
 - RGB 作为播放时钟，拖动时间轴时同步定位各视频；深度独立帧偏移仍有效。
 - 自动发现点云的目录为 `pcds/<dataset>/<task>/{original,baseline,refine}/cam_*/frame_*.pcd`。PCD 首次打开自动加载，右上角选择固定帧，并匹配最近的已有点云，不随视频逐帧切换。
+- manifest 的 group 可用 `pcd_video` 指定预渲染 MP4；它会替代固定 PCD canvas，并与同组深度和 RGB 共用时间轴、播放状态及帧偏移。
 - 修改代码后请重启 `server.py` 并强制刷新浏览器（Ctrl+Shift+R）。`Depth video not found` 表示对应方法/视角没有找到深度视频，需要先生成结果或在 manifest 中指定路径。
 
 点云操作：按住鼠标左键拖拽旋转（支持触屏单指拖动），同一相机视角下 Metric/Nested/Refine 同步旋转，HEAD/LEFT WRIST/RIGHT WRIST 互不影响。滚轮同步缩放同视角的所有点云；双击重置同视角的旋转和缩放。切换点云帧或其他方法加载完成后，仍保持该视角的旋转角度和缩放倍率。
