@@ -13,3 +13,6 @@
 [submodule "third_party/lingbot-vision"]
 	path = third_party/lingbot-vision
 	url = https://github.com/Robbyant/lingbot-vision.git
+[submodule "third_party/VDPP"]
+	path = third_party/VDPP
+	url = https://github.com/injun-baek/VDPP.git

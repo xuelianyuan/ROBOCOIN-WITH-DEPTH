@@ -213,3 +213,23 @@ python scripts/depth_refine/summarize_timings.py \
 逐帧明细中的 `fit_seconds` 是直方图和矩阵求解，`apply_seconds` 是映射应用，`total_seconds` 加上参考读取、配对和 NPZ 写盘。视频解码、指标计算、绘图、preencode 保存及视频编码计入 episode 总耗时，不分摊到各帧。
 
 旧结果没有计时数据，不能用文件时间戳准确还原。上述 `--force` 会重新生成 baseline 并覆盖其结果和计时；不加时已有 baseline 直接跳过、保留原计时。refine 每次重新处理并更新对应阶段计时。验证未通过而跳过视频的 full/rife/rife_refine 记录标为 `skipped`，不算完整 refine。汇总命令每次覆盖三份 CSV，原始 JSON 保留。
+
+## 7. DA3Metric + 尺度保持 VDPP
+
+以下命令处理 `grind_ink` 的头部 RGB 完整视频。内参是仓库中 640×480 head RGB
+的默认值，不是该视频独立标定结果：
+
+```bash
+python scripts/depth_refine/run_metric_vdpp.py \
+  --video data/original/ai2_depth_preview/AI2_Alphabot_2_grind_ink_0_qced_hardlink_ep000000/videos/chunk-000/observation.images.cam_front_head_rgb/episode_000000.mp4 \
+  --output outputs/da3_metric_vdpp_grind_ink_20261028 \
+  --da3-model depth-anything/DA3METRIC-LARGE \
+  --vdpp-root third_party/VDPP \
+  --vdpp-checkpoint third_party/VDPP/checkpoints/vdpp.pth \
+  --intrinsics 605.4 605.2 323.3 252.0 \
+  --intrinsics-source repository-head-default-user-confirmed \
+  --chunk-size 32 --overlap 8 --device cuda
+```
+
+首次使用前需初始化两个 submodule、安装依赖并下载 VDPP 权重。完整的准备步骤、
+算法说明、输出文件和限制见 [METRIC_VDPP.md](METRIC_VDPP.md)。

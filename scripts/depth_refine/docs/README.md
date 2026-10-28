@@ -2,6 +2,9 @@
 
 常用命令可直接复制：[命令速查 COMMANDS.md](COMMANDS.md)。
 
+DA3Metric + 尺度保持 VDPP 的原理、安装和完整示例见
+[METRIC_VDPP.md](METRIC_VDPP.md)。
+
 本目录提供 LeRobot 数据集的稀疏深度参考生成、深度分布迁移、批处理和可视化入口。本文参考 Git 已提交版本的根目录 README 中“深度处理 Pipeline”和点云检查说明，并按重构后的脚本实现更新路径、参数和使用限制。
 
 ## 1. 脚本总览
@@ -13,6 +16,7 @@
 | [run_batch.py](../run_batch.py) | 遍历多个项目、多个相机，依次调用 baseline/refine 或绘制均值曲线 | 包含多个数据集的根目录 | 各项目独立的 `depth_results/` |
 | [plot_comparison.py](../plot_comparison.py) | 绘制原始、修正后和 Nested 的 3×3 对比图 | 两个完整深度视频、对应 Nested 采样帧 | 点云、深度图、直方图组成的 PNG |
 | [inspect_dataset.py](../inspect_dataset.py) | 交互浏览 RGB/深度/点云，对比外部深度，或批量导出 PCD | LeRobot 数据集或三套深度视频 | Matplotlib 窗口、binary PCD 文件 |
+| [run_metric_vdpp.py](../run_metric_vdpp.py) | DA3Metric 生成米制深度，VDPP 稳定 inverse depth，再恢复全局米制尺度 | 单个 RGB 视频、相机内参 | float32 米制 NPY、拟合报告、固定色标对比视频 |
 
 公共路径和采样索引工具位于 [src/depth_refine/io_utils.py](../../../src/depth_refine/io_utils.py)。原始 LeRobot 加载入口仍为 [scripts/load_lerobot.py](../../load_lerobot.py)；本目录的扩展检查功能使用 `inspect_dataset.py`。
 
@@ -46,6 +50,7 @@ RGB 视频 ── build_baseline.py ── 稀疏参考 NPY / 统计 / 可选视
 | refine 的 rife | 另需 `src/depth_repair/da3_rife.py` 使用的 RIFE 实现及权重 |
 | 静态对比/交互浏览 | Matplotlib；交互浏览另需 LeRobot、项目深度数据集类及其视频解码依赖 |
 | 批量 PCD | `tools/depth_to_pointcloud.py` 及其 NumPy、OpenCV、tqdm 等依赖 |
+| DA3Metric + VDPP | Depth Anything 3、VDPP、SciPy、OpenCV、PyTorch、ffmpeg；模型源码通过 Git submodule 获取，权重需另行下载 |
 
 所有命令从**仓库根目录**运行。当前部分脚本移动目录后仍将 `scripts/` 加入模块搜索路径，运行前显式加入仓库根目录，保证 `src`、`tools` 及批处理子进程可导入：
 
