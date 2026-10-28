@@ -32,6 +32,13 @@ Thumbs.db
 .pytest_cache/
 tests/output/
 
+# Video depth products and raw benchmark data
+outputs/
+benchmarks/results/
+.*.tmp.*
+*.run.log
+run.log
+
 # Jupyter
 .ipynb_checkpoints/
 

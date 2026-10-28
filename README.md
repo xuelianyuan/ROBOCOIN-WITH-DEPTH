@@ -180,6 +180,71 @@ pip install loguru
 
 ## 快速开始
 
+### 单个 RGB 视频生成绝对深度视频
+
+新的视频产品入口使用刷新后的
+`depth-anything/DA3NESTED-GIANT-LARGE-1.1`：按时间顺序对关键帧窗口运行
+DA3 Nested，在 RGB 上用 RIFE 估计运动，再双向 warp 米制深度补齐非关键帧。
+
+```bash
+python scripts/estimate_video_depth.py input.mp4 -o output_depth.mp4
+```
+
+默认配置仅来自 `configs/da3_nested_rife.yaml`。最常用的覆盖参数为：
+
+```bash
+python scripts/estimate_video_depth.py input.mp4 -o output_depth.mp4 \
+  --stride 5 --device cuda:0
+```
+
+不加载模型即可检查输入元数据、场景边界、最终配置和预计关键帧数：
+
+```bash
+python scripts/estimate_video_depth.py input.mp4 --dry-run --device cpu
+```
+
+核心 Python API 返回 `float32 (T,H,W)`，单位固定为米：
+
+```python
+from src.video_depth import VideoDepthConfig, VideoDepthPipeline
+
+config = VideoDepthConfig.from_yaml("configs/da3_nested_rife.yaml")
+pipeline = VideoDepthPipeline(config)
+result = pipeline.run("input.mp4", "output_depth.mp4")
+assert result.unit == "m"
+```
+
+默认输出目录为 `outputs/<input_stem>/<run_id>/`，包含 `depth.mp4`、无损米制
+`depth.npz`、`run_config.yaml`、`run_metadata.json` 和 `run.log`。12-bit MP4
+只在编码边界把米转换为毫米；超出 4095 mm 的像素比例会写入元数据，完整量程仍保留在
+NPZ 中。VFR 输入当前编码为同平均 FPS 的 CFR，转换也会在元数据中明确记录。
+
+当前机器若没有可用 NVIDIA 驱动，可用 `--device cpu --dry-run` 或 CPU/mock 测试验证
+接口；Nested 大模型的实际推理性能不对 CPU 作承诺。
+
+快速测试：
+
+```bash
+python -m unittest discover -s tests/video_depth -v
+# 安装 pytest 后也可运行：pytest -q tests/video_depth -m "not slow"
+```
+
+### A800 1/2/4 卡评测
+
+评测入口采用“一张 GPU 独占一个模型实例、处理独立视频”的任务级并行。多卡结果表示
+批量吞吐提升，不表示单视频延迟按卡数缩短：
+
+```bash
+python tests/benchmark_video_depth.py benchmark_videos \
+  --gpu-count 4 --devices 0,1,2,3 --repetitions 3
+```
+
+可用 `--ground-truth-dir` 指向以 `<video_stem>.npz` 命名且含 `depth_m` 的真值目录。
+原始结果写入 `benchmarks/results/<run_id>/metrics.json` 和 `timings.csv`；分别运行
+1/2/4 卡后，应在 `benchmarks/reports/` 提交汇总、加速比、扩展效率和复现命令。
+
+### LeRobot 数据集批处理
+
 假设你已经有一个 LeRobot 数据集，目录结构如下：
 ```bash
 data/lerobot/dataset/

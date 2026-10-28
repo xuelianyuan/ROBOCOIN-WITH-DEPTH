@@ -1,0 +1,29 @@
+strategy: da3_nested_rife
+device: cuda:0
+seed: 42
+
+sampling:
+  stride: 5
+  scene_change_threshold: 0.35
+
+da3:
+  model_id: depth-anything/DA3NESTED-GIANT-LARGE-1.1
+  process_res: 504
+  window_size: 16
+  overlap: 4
+  align_scale: true
+  max_scale_correction: 0.05
+  min_alignment_pixels: 100
+
+rife:
+  checkpoint: third_party/Practical-RIFE/train_log
+  pad_multiple: 64
+  min_confidence: 0.05
+
+output:
+  codec: libx265
+  pixel_format: gray12le
+  crf: 6
+  preset: slow
+  max_depth_mm: 4095
+  save_npz: true
